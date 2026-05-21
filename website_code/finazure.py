@@ -208,7 +208,6 @@ def fetch_and_process_local_data():
         df = df[df['system'] != "Unknown"]
         if df.empty: return df
 
-        df = df.sort_values(['system', 'prn', 'datetime'])
 
          #remove duplicates keeping one with most n
         df = (
@@ -216,7 +215,11 @@ def fetch_and_process_local_data():
             .drop_duplicates(subset=["system", "prn", "datetime"], keep="first")
         )
 
+        df = df.sort_values(['datetime'])
+
         df['time_diff'] = df.groupby(['system', 'prn'])['datetime'].diff()
+
+
         df = df[(df['time_diff'] >= pd.Timedelta(seconds=30)) | (df['time_diff'].isna())]
         df = df.drop(columns=['time_diff'])
 
