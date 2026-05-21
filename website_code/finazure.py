@@ -174,6 +174,7 @@ def fetch_and_process_local_data():
 
         df = pd.concat(df_list, ignore_index=True)
         
+
         if 'const' not in df.columns:
             return pd.DataFrame()
 
@@ -209,8 +210,10 @@ def fetch_and_process_local_data():
         if df.empty: return df
 
         df = df.sort_values(['system', 'prn', 'datetime'])
-        df = df.drop_duplicates(subset=['system', 'prn', 'datetime'], keep='last')
-        
+        df = (
+            df.sort_values("n_f1", ascending=False)
+            .drop_duplicates(subset=["system", "prn", "datetime"], keep="first")
+        )
         df['time_diff'] = df.groupby(['system', 'prn'])['datetime'].diff()
         df = df[(df['time_diff'] >= pd.Timedelta(seconds=30)) | (df['time_diff'].isna())]
         df = df.drop(columns=['time_diff'])
