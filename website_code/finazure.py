@@ -292,7 +292,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "25px", "maxWidth": "16
         dbc.Col([
             html.H3("ScintPi Monitoring Dashboard", className="text-white text-center mb-1", style={'fontWeight': 'bold'}),
             html.H5("Real-time GNSS Scintillation and TEC Observations", className="text-secondary text-center mb-2", style={'fontStyle': 'italic'}),
-            html.P("Station: Jicamarca Radio Observatory | Location: 11.95°S, 76.87°W | Time zone: PET (UTC−5) | Window: Last 24 Hours", 
+            html.P("Station: __STATION_NAME__ | Location: __STATION_LOCATION__ | Time zone: PET (UTC−5) | Window: Last 24 Hours", 
                    className="text-muted text-center mb-2", style={'fontSize': '0.95rem'}),
             html.A("About ScintPi", href="http://scintpi.utdallas.edu", target="_blank", className="text-info text-center d-block mb-2"),
             html.Div("⚠️ Note: This dashboard is not currently optimized for mobile devices.", className="text-warning text-center small mb-2"),

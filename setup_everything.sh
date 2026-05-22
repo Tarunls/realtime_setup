@@ -11,6 +11,11 @@ read -p "🌐 Enter a unique ID for this station (e.g., node2, alpha, dallas1): 
 # Storage accounts must be lowercase alphanumeric only, max 24 chars
 CLEAN_ID=$(echo "$STATION_ID" | tr -dc 'a-z0-9' | cut -c 1-10)
 
+read -p "📍 Enter the station name (e.g., Jicamarca Radio Observatory): " STATION_NAME
+read -p "🌎 Enter the station latitude (e.g., 11.95°S): " STATION_LAT
+read -p "🌎 Enter the station longitude (e.g., 76.87°W): " STATION_LON
+STATION_LOCATION="${STATION_LAT}, ${STATION_LON}"
+
 # Fixed Cloud Variables
 RG_NAME="scintpi-rg"
 LOCATION="southcentralus"
@@ -78,6 +83,11 @@ ACCT_KEY=$(echo "$AZURE_CONN_STR" | sed -n 's/.*AccountKey=\([^;]*\).*/\1/p')
 # --- 4. INJECT CONNECTION STRING INTO AUTOMATION.PY ---
 echo "⚙️  Injecting credentials into data_log/automation.py..."
 sed -i "s|AZURE_CONNECTION_STRING=\"\"|AZURE_CONNECTION_STRING=\"$AZURE_CONN_STR\"|g" data_log/automation.py
+
+# --- 4.5 INJECT STATION NAME & LOCATION INTO DASHBOARD ---
+echo "📍 Injecting station info into website_code/finazure.py..."
+sed -i "s|__STATION_NAME__|$STATION_NAME|g" website_code/finazure.py
+sed -i "s|__STATION_LOCATION__|$STATION_LOCATION|g" website_code/finazure.py
 
 # --- 5. CONFIGURE LOCAL RASPBERRY PI CRONTAB & START REALTIME ---
 echo "⏰ Setting up Raspberry Pi automated Cron jobs..."
