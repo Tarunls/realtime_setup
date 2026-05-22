@@ -22,8 +22,29 @@ CONTAINER_NAME="scintpi"
 # --- 2. INSTALL LOCAL RASPBERRY PI DEPENDENCIES ---
 echo "📦 Installing required Python libraries for the Raspberry Pi..."
 sudo apt-get update -y
-sudo apt-get install -y python3-pip
+sudo apt-get install -y python3-pip curl
 pip3 install azure-storage-blob --break-system-packages 2>/dev/null || pip3 install azure-storage-blob
+
+# --- 2.5 INSTALL AZURE CLI ---
+if ! command -v az &> /dev/null; then
+    echo "☁️  Azure CLI not found. Installing..."
+    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+else
+    echo "✅ Azure CLI already installed ($(az version --query '\"azure-cli\"' -o tsv))."
+fi
+
+# --- 2.6 AZURE LOGIN ---
+echo "-------------------------------------------------------------------"
+echo "🔐 You need to log in to your Azure account."
+echo "   A browser window will open (or you'll get a device code)."
+echo "   Complete the sign-in and then return here."
+echo "-------------------------------------------------------------------"
+az login
+if [ $? -ne 0 ]; then
+    echo "❌ Azure login failed. Cannot continue without authentication."
+    exit 1
+fi
+echo "✅ Azure login successful!"
 
 # --- 3. CREATE AZURE STORAGE AND GET KEYS ---
 echo "☁️  Creating Azure Resource Group..."
@@ -66,8 +87,8 @@ chmod +x data_log/realtime_2026
 chmod +x data_log/automation.py
 
 crontab -l 2>/dev/null | grep -v 'realtime_2026' | grep -v 'automation.py' | crontab -
-(crontab -l 2>/dev/null; echo "@reboot cd $CURRENT_DIR/data_log && ./realtime_2026") | crontab -
-(crontab -l 2>/dev/null; echo "*/5 * * * * cd $CURRENT_DIR/data_log && /usr/bin/python3 automation.py") | crontab -
+(crontab -l 2>/dev/null; echo "@reboot cd $CURRENT_DIR && ./data_log/realtime_2026") | crontab -
+(crontab -l 2>/dev/null; echo "*/5 * * * * cd $CURRENT_DIR && /usr/bin/python3 data_log/automation.py") | crontab -
 
 echo "-------------------------------------------------------------------"
 echo "⚠️  MANUAL REVIEW REQUIRED"
@@ -84,8 +105,7 @@ echo "-------------------------------------------------------------------"
 
 echo "▶️  Starting realtime_2026 data collection in the background..."
 pkill realtime_2026 2>/dev/null || true
-cd data_log && nohup ./realtime_2026 > /dev/null 2>&1 &
-cd ..
+cd "$CURRENT_DIR" && nohup ./data_log/realtime_2026 > /dev/null 2>&1 &
 
 # --- 6. CLOUD INFRASTRUCTURE: APP SERVICE PLAN & WEB APP ---
 echo "☁️  Provisioning Azure App Service Web App ($WEBAPP_NAME)..."
@@ -116,9 +136,9 @@ az webapp config appsettings set --resource-group $RG_NAME --name $WEBAPP_NAME -
 
 # --- 9. PACKAGE AND DEPLOY THE DASHBOARD ---
 echo "📦 Packaging finazure.py and requirements.txt..."
-cd website_code
-zip ../deployment.zip finazure.py requirements.txt
-cd ..
+cd "$CURRENT_DIR/website_code"
+zip "$CURRENT_DIR/deployment.zip" finazure.py requirements.txt
+cd "$CURRENT_DIR"
 
 echo "🚀 Deploying code to Azure Web App (This may take a few minutes)..."
 az webapp deployment source config-zip --resource-group $RG_NAME --name $WEBAPP_NAME --src deployment.zip
