@@ -28,7 +28,7 @@ SYSTEM_MAP = {
     0: "GPS", 1: "SBAS", 2: "Galileo", 3: "BeiDou", 6: "GLONASS"
 }
 TEC_CONVERSION_FACTOR = 9.5196 
-STATION_TZ = 'America/Lima' # PET (UTC-5)
+STATION_TZ = '__STATION_TIMEZONE__'
 
 # Initialize Dash
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG], 
@@ -93,6 +93,51 @@ app.index_string = '''
             @keyframes pulse {
                 0%, 100% { opacity: 1; }
                 50% { opacity: 0.5; }
+            }
+
+            /* --- MOBILE BOTTOM TABS --- */
+            #mobile-tab-bar { display: none; }
+
+            @media (max-width: 768px) {
+                #mobile-tab-bar {
+                    display: flex !important;
+                    position: fixed;
+                    bottom: 0; left: 0; right: 0;
+                    z-index: 1000;
+                    background: linear-gradient(180deg, rgba(11,15,25,0.95), rgba(11,15,25,1));
+                    border-top: 1px solid rgba(0, 204, 150, 0.2);
+                    backdrop-filter: blur(10px);
+                    padding: 6px 0 max(6px, env(safe-area-inset-bottom));
+                }
+                #mobile-tab-bar button {
+                    flex: 1; background: none; border: none;
+                    color: #64748b; font-family: 'Inter', sans-serif;
+                    font-size: 0.7rem; font-weight: 600;
+                    padding: 6px 4px; cursor: pointer;
+                    display: flex; flex-direction: column;
+                    align-items: center; gap: 3px;
+                    transition: color 0.2s;
+                }
+                #mobile-tab-bar button.active { color: #00cc96; }
+                #mobile-tab-bar button .tab-icon { font-size: 1.3rem; }
+
+                .container-fluid { padding-bottom: 72px !important; }
+                .mobile-panel { display: none; }
+                .mobile-panel.mobile-active { display: block !important; }
+
+                .mobile-panel .row > [class*="col-md-9"],
+                .mobile-panel .row > [class*="col-md-3"] {
+                    flex: 0 0 100%; max-width: 100%;
+                }
+
+                .mobile-header h3 { font-size: 1.1rem !important; }
+                .mobile-header h5 { font-size: 0.85rem !important; }
+                .mobile-header p { font-size: 0.75rem !important; }
+            }
+
+            @media (min-width: 769px) {
+                .mobile-panel { display: block !important; }
+                #mobile-tab-bar { display: none !important; }
             }
         </style>
     </head>
@@ -286,169 +331,192 @@ app.layout = dbc.Container(fluid=True, style={"padding": "25px", "maxWidth": "16
     dcc.Location(id='url', refresh=False),
     # Interval timer for live refresh
     dcc.Interval(id='live-update', interval=UPDATE_INTERVAL_MS, n_intervals=0),
+    # Hidden store for active mobile tab
+    dcc.Store(id='mobile-active-tab', data='skyplot'),
 
     # --- HEADER ---
     dbc.Row([
         dbc.Col([
             html.H3("ScintPi Monitoring Dashboard", className="text-white text-center mb-1", style={'fontWeight': 'bold'}),
             html.H5("Real-time GNSS Scintillation and TEC Observations", className="text-secondary text-center mb-2", style={'fontStyle': 'italic'}),
-            html.P("Station: __STATION_NAME__ | Location: __STATION_LOCATION__ | Time zone: PET (UTC−5) | Window: Last 24 Hours", 
+            html.P("Station: __STATION_NAME__ | Location: __STATION_LOCATION__ | Timezone: __STATION_TIMEZONE__ | Window: Last 24 Hours", 
                    className="text-muted text-center mb-2", style={'fontSize': '0.95rem'}),
             html.A("About ScintPi", href="http://scintpi.utdallas.edu", target="_blank", className="text-info text-center d-block mb-2"),
-            html.Div("⚠️ Note: This dashboard is not currently optimized for mobile devices.", className="text-warning text-center small mb-2"),
             html.Div(id='last-update-display', className="text-success text-center fw-bold mb-3")
         ])
-    ], className="mb-0"),
+    ], className="mb-0 mobile-header"),
 
-    # --- ROW 1: SKYPLOT ---
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader(html.Div([
-                    html.Span("Satellite Sky Map", style={'fontWeight': 'bold', 'color': '#ffffff'}),
-                    html.Br(),
-                    html.Span("Color = S4 index", style={'fontSize': '0.8rem', 'color': '#94a3b8', 'textTransform': 'none', 'letterSpacing': '0'}),
-                    html.Div("👉 Click any satellite to view its detailed profile below.", className="small mt-1", style={"color": "#00cc96"})
-                ]), className="text-center pb-2 pt-3"),
-                dbc.CardBody(
-                    dcc.Loading(dcc.Graph(id='sky-plot', config={'displayModeBar': False}, style={"height": "450px"}), color="#00cc96")
-                )
-            ], className="border-0 shadow-sm mb-4")
-        ], md=9, className="mb-4"),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Skyplot Controls", className="text-center"),
-                dbc.CardBody([
-                    html.Label("Elevation Mask (°):", className="fw-bold text-muted small"),
-                    dbc.Input(id='sky-elev-mask', type='number', value=10, min=0, max=90, className="mb-3"),
-                    
-                    html.Label("Time Window:", className="fw-bold text-muted small"),
-                    dcc.Dropdown(id='sky-time-window', options=[
-                        {'label': 'Last 15 Mins', 'value': 0.25},
-                        {'label': 'Last 1 Hour', 'value': 1},
-                        {'label': 'Last 3 Hours', 'value': 3},
-                        {'label': 'Last 6 Hours', 'value': 6}
-                    ], value=1, clearable=False, className="mb-3 text-dark"),
-
-                    html.Label("Signal Band:", className="fw-bold text-muted small"),
-                    dcc.Dropdown(id='sky-band', options=[
-                        {'label': 'L1 Frequency', 'value': 'L1'},
-                        {'label': 'L2 Frequency', 'value': 'L2'}
-                    ], value='L1', clearable=False, className="mb-3 text-dark"),
-
-                    html.Label("Color Bar Min/Max (S4):", className="fw-bold text-muted small"),
-                    dbc.Row([
-                        dbc.Col(dbc.Input(id='sky-s4-min', type='number', value=0, step=0.1, className="mb-3"), width=6),
-                        dbc.Col(dbc.Input(id='sky-s4-max', type='number', value=0.6, step=0.1, className="mb-3"), width=6)
-                    ]),
-
-                    dbc.Row([
-                        dbc.Col(dbc.Button("Apply", id='btn-sky-apply', color="primary", className="w-100 fw-bold"), width=7),
-                        dbc.Col(dbc.Button("Reset", id='btn-sky-reset', outline=True, color="secondary", className="w-100"), width=5)
-                    ])
-                ])
-            ], className="border-0 shadow-sm", style={"height": "100%"})
-        ], md=3, className="mb-4")
-    ]),
-
-    # --- ROW 2: INDIVIDUAL SATELLITE PANEL (5 Plots) ---
-    dbc.Collapse(
+    # --- PANEL 1: SKYPLOT ---
+    html.Div(id='panel-skyplot', className='mobile-panel mobile-active', children=[
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(id='detail-header', className="text-center"),
-                    dbc.CardBody(dcc.Graph(id='detail-graph')) 
-                ], className="shadow mb-4 border-0")
+                    dbc.CardHeader(html.Div([
+                        html.Span("Satellite Sky Map", style={'fontWeight': 'bold', 'color': '#ffffff'}),
+                        html.Br(),
+                        html.Span("Color = S4 index", style={'fontSize': '0.8rem', 'color': '#94a3b8', 'textTransform': 'none', 'letterSpacing': '0'}),
+                        html.Div("Click any satellite to view its detailed profile.", className="small mt-1", style={"color": "#00cc96"})
+                    ]), className="text-center pb-2 pt-3"),
+                    dbc.CardBody(
+                        dcc.Loading(dcc.Graph(id='sky-plot', config={'displayModeBar': False}, style={"height": "450px"}), color="#00cc96")
+                    )
+                ], className="border-0 shadow-sm mb-4")
             ], md=9, className="mb-4"),
             
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Detail Controls", className="text-center"),
+                    dbc.CardHeader("Skyplot Controls", className="text-center"),
                     dbc.CardBody([
-                        html.Label("Constellation:", className="fw-bold text-muted small"),
-                        dcc.Dropdown(id='detail-constellation', options=[{'label': v, 'value': v} for v in SYSTEM_MAP.values()], 
-                                     value=default_sys, clearable=False, className="mb-3 text-dark"),
+                        html.Label("Elevation Mask:", className="fw-bold text-muted small"),
+                        dbc.Input(id='sky-elev-mask', type='number', value=10, min=0, max=90, className="mb-3"),
                         
-                        html.Label("Satellite PRN:", className="fw-bold text-muted small"),
-                        dcc.Dropdown(id='detail-prn', options=initial_prn_options, value=default_prn, clearable=False, className="mb-3 text-dark"),
-
                         html.Label("Time Window:", className="fw-bold text-muted small"),
-                        dcc.Dropdown(id='detail-time-window', options=[
+                        dcc.Dropdown(id='sky-time-window', options=[
+                            {'label': 'Last 15 Mins', 'value': 0.25},
                             {'label': 'Last 1 Hour', 'value': 1},
                             {'label': 'Last 3 Hours', 'value': 3},
-                            {'label': 'Last 6 Hours', 'value': 6},
-                            {'label': 'Last 12 Hours', 'value': 12},
-                            {'label': 'Last 24 Hours', 'value': 24}
+                            {'label': 'Last 6 Hours', 'value': 6}
                         ], value=1, clearable=False, className="mb-3 text-dark"),
-                        
-                        html.Label("Elevation Filter (°):", className="fw-bold text-muted small"),
-                        html.Div("Points below this mask drop to NaN.", className="text-muted mb-1", style={'fontSize': '0.75rem'}),
-                        dbc.Input(id='detail-elev-mask', type='number', value=10, min=0, max=90, className="mb-4"),
+
+                        html.Label("Signal Band:", className="fw-bold text-muted small"),
+                        dcc.Dropdown(id='sky-band', options=[
+                            {'label': 'L1 Frequency', 'value': 'L1'},
+                            {'label': 'L2 Frequency', 'value': 'L2'}
+                        ], value='L1', clearable=False, className="mb-3 text-dark"),
+
+                        html.Label("Color Bar Min/Max (S4):", className="fw-bold text-muted small"),
+                        dbc.Row([
+                            dbc.Col(dbc.Input(id='sky-s4-min', type='number', value=0, step=0.1, className="mb-3"), width=6),
+                            dbc.Col(dbc.Input(id='sky-s4-max', type='number', value=0.6, step=0.1, className="mb-3"), width=6)
+                        ]),
 
                         dbc.Row([
-                            dbc.Col(dbc.Button("Apply", id='btn-detail-apply', color="primary", className="w-100 fw-bold"), width=7),
-                            dbc.Col(dbc.Button("Reset", id='btn-detail-reset', outline=True, color="secondary", className="w-100"), width=5)
+                            dbc.Col(dbc.Button("Apply", id='btn-sky-apply', color="primary", className="w-100 fw-bold"), width=7),
+                            dbc.Col(dbc.Button("Reset", id='btn-sky-reset', outline=True, color="secondary", className="w-100"), width=5)
                         ])
                     ])
                 ], className="border-0 shadow-sm", style={"height": "100%"})
             ], md=3, className="mb-4")
-        ]),
-        id='detail-collapse',
-        is_open=True 
-    ),
+        ])
+    ]),
 
-    # --- ROW 3: MAIN TIMELINE & CONTROLS ---
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader(html.Div([
-                    html.Span("Scintillation Time Series", style={'fontWeight': 'bold', 'color': '#ffffff'}),
-                    html.Br(),
-                    html.Span("Amplitude Scintillation Index (S4)", style={'fontSize': '0.8rem', 'color': '#94a3b8', 'textTransform': 'none', 'letterSpacing': '0'}),
-                    html.Div("👉 Click any data point to view its detailed profile above.", className="small mt-1", style={"color": "#00cc96"})
-                ]), className="text-center pb-2 pt-3"),
-                dbc.CardBody([
-                    dcc.Loading(
-                        dcc.Graph(id='main-graph', config={'displayModeBar': False}, style={"height": "500px"}),
-                        color="#00cc96", type="circle"
-                    )
-                ])
-            ], className="border-0 shadow-sm", style={"height": "100%"})
-        ], md=9, className="mb-4"),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Timeline Controls", className="text-center"),
-                dbc.CardBody([
-                    html.Label("Elevation Mask (°):", className="fw-bold text-muted small"),
-                    dbc.Input(id='main-elev-mask', type='number', value=30, min=0, max=90, className="mb-3"),
-                    
-                    html.Label("Time Window:", className="fw-bold text-muted small"),
-                    dcc.Dropdown(id='main-time-window', options=[
-                        {'label': 'Last 1 Hour', 'value': 1},
-                        {'label': 'Last 6 Hours', 'value': 6},
-                        {'label': 'Last 12 Hours', 'value': 12},
-                        {'label': 'Last 24 Hours', 'value': 24}
-                    ], value=12, clearable=False, className="mb-3 text-dark"),
-                    
-                    html.Label("Constellations:", className="fw-bold text-muted small"),
-                    dcc.Dropdown(id='main-constellations', options=[{'label': v, 'value': v} for v in SYSTEM_MAP.values()], 
-                                 value=list(SYSTEM_MAP.values()), multi=True, className="mb-3 text-dark"),
-
-                    html.Label("Signal Band:", className="fw-bold text-muted small"),
-                    dcc.Dropdown(id='main-band', options=[
-                        {'label': 'L1 Frequency', 'value': 'L1'},
-                        {'label': 'L2 Frequency', 'value': 'L2'}
-                    ], value='L1', clearable=False, className="mb-4 text-dark"),
-
-                    dbc.Row([
-                        dbc.Col(dbc.Button("Apply", id='btn-main-apply', color="primary", className="w-100 fw-bold"), width=7),
-                        dbc.Col(dbc.Button("Reset", id='btn-main-reset', outline=True, color="secondary", className="w-100"), width=5)
+    # --- PANEL 2: S4 TIMELINE ---
+    html.Div(id='panel-timeline', className='mobile-panel', children=[
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader(html.Div([
+                        html.Span("Scintillation Time Series", style={'fontWeight': 'bold', 'color': '#ffffff'}),
+                        html.Br(),
+                        html.Span("Amplitude Scintillation Index (S4)", style={'fontSize': '0.8rem', 'color': '#94a3b8', 'textTransform': 'none', 'letterSpacing': '0'}),
+                        html.Div("Click any data point to view its detailed profile.", className="small mt-1", style={"color": "#00cc96"})
+                    ]), className="text-center pb-2 pt-3"),
+                    dbc.CardBody([
+                        dcc.Loading(
+                            dcc.Graph(id='main-graph', config={'displayModeBar': False}, style={"height": "500px"}),
+                            color="#00cc96", type="circle"
+                        )
                     ])
-                ])
-            ], className="border-0 shadow-sm", style={"height": "100%"})
-        ], md=3, className="mb-4")
+                ], className="border-0 shadow-sm", style={"height": "100%"})
+            ], md=9, className="mb-4"),
+            
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Timeline Controls", className="text-center"),
+                    dbc.CardBody([
+                        html.Label("Elevation Mask:", className="fw-bold text-muted small"),
+                        dbc.Input(id='main-elev-mask', type='number', value=30, min=0, max=90, className="mb-3"),
+                        
+                        html.Label("Time Window:", className="fw-bold text-muted small"),
+                        dcc.Dropdown(id='main-time-window', options=[
+                            {'label': 'Last 1 Hour', 'value': 1},
+                            {'label': 'Last 6 Hours', 'value': 6},
+                            {'label': 'Last 12 Hours', 'value': 12},
+                            {'label': 'Last 24 Hours', 'value': 24}
+                        ], value=12, clearable=False, className="mb-3 text-dark"),
+                        
+                        html.Label("Constellations:", className="fw-bold text-muted small"),
+                        dcc.Dropdown(id='main-constellations', options=[{'label': v, 'value': v} for v in SYSTEM_MAP.values()], 
+                                     value=list(SYSTEM_MAP.values()), multi=True, className="mb-3 text-dark"),
+
+                        html.Label("Signal Band:", className="fw-bold text-muted small"),
+                        dcc.Dropdown(id='main-band', options=[
+                            {'label': 'L1 Frequency', 'value': 'L1'},
+                            {'label': 'L2 Frequency', 'value': 'L2'}
+                        ], value='L1', clearable=False, className="mb-4 text-dark"),
+
+                        dbc.Row([
+                            dbc.Col(dbc.Button("Apply", id='btn-main-apply', color="primary", className="w-100 fw-bold"), width=7),
+                            dbc.Col(dbc.Button("Reset", id='btn-main-reset', outline=True, color="secondary", className="w-100"), width=5)
+                        ])
+                    ])
+                ], className="border-0 shadow-sm", style={"height": "100%"})
+            ], md=3, className="mb-4")
+        ])
+    ]),
+
+    # --- PANEL 3: INDIVIDUAL SATELLITE DETAIL ---
+    html.Div(id='panel-detail', className='mobile-panel', children=[
+        dbc.Collapse(
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader(id='detail-header', className="text-center"),
+                        dbc.CardBody(dcc.Graph(id='detail-graph')) 
+                    ], className="shadow mb-4 border-0")
+                ], md=9, className="mb-4"),
+                
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Detail Controls", className="text-center"),
+                        dbc.CardBody([
+                            html.Label("Constellation:", className="fw-bold text-muted small"),
+                            dcc.Dropdown(id='detail-constellation', options=[{'label': v, 'value': v} for v in SYSTEM_MAP.values()], 
+                                         value=default_sys, clearable=False, className="mb-3 text-dark"),
+                            
+                            html.Label("Satellite PRN:", className="fw-bold text-muted small"),
+                            dcc.Dropdown(id='detail-prn', options=initial_prn_options, value=default_prn, clearable=False, className="mb-3 text-dark"),
+
+                            html.Label("Time Window:", className="fw-bold text-muted small"),
+                            dcc.Dropdown(id='detail-time-window', options=[
+                                {'label': 'Last 1 Hour', 'value': 1},
+                                {'label': 'Last 3 Hours', 'value': 3},
+                                {'label': 'Last 6 Hours', 'value': 6},
+                                {'label': 'Last 12 Hours', 'value': 12},
+                                {'label': 'Last 24 Hours', 'value': 24}
+                            ], value=1, clearable=False, className="mb-3 text-dark"),
+                            
+                            html.Label("Elevation Filter:", className="fw-bold text-muted small"),
+                            html.Div("Points below this mask drop to NaN.", className="text-muted mb-1", style={'fontSize': '0.75rem'}),
+                            dbc.Input(id='detail-elev-mask', type='number', value=10, min=0, max=90, className="mb-4"),
+
+                            dbc.Row([
+                                dbc.Col(dbc.Button("Apply", id='btn-detail-apply', color="primary", className="w-100 fw-bold"), width=7),
+                                dbc.Col(dbc.Button("Reset", id='btn-detail-reset', outline=True, color="secondary", className="w-100"), width=5)
+                            ])
+                        ])
+                    ], className="border-0 shadow-sm", style={"height": "100%"})
+                ], md=3, className="mb-4")
+            ]),
+            id='detail-collapse',
+            is_open=True 
+        )
+    ]),
+
+    # --- MOBILE BOTTOM TAB BAR ---
+    html.Div(id='mobile-tab-bar', children=[
+        html.Button([
+            html.Span("\U0001f4e1", className="tab-icon"),
+            html.Span("Sky Plot")
+        ], id='tab-btn-skyplot', className='active', n_clicks=0),
+        html.Button([
+            html.Span("\U0001f4c8", className="tab-icon"),
+            html.Span("S4 Timeline")
+        ], id='tab-btn-timeline', n_clicks=0),
+        html.Button([
+            html.Span("\U0001f6f0", className="tab-icon"),
+            html.Span("Satellite")
+        ], id='tab-btn-detail', n_clicks=0),
     ])
 ])
 
@@ -646,7 +714,7 @@ def display_details(sys, prn, apply_clicks, reset_clicks, n_intervals, time_wind
     date_str = global_max_loc.strftime('%b %d, %Y')
     if start_time.date() != global_max_loc.date():
         date_str = f"{start_time.strftime('%b %d')} - {global_max_loc.strftime('%b %d, %Y')}"
-    xaxis_title = f"Local Time (PET, UTC-5) | Date: {date_str}"
+    xaxis_title = f"Local Time ({STATION_TZ}) | Date: {date_str}"
 
     fig.update_xaxes(title_text=xaxis_title, title_font=dict(size=14), showgrid=True, gridcolor='rgba(255,255,255,0.05)', tickformat='%H:%M', row=num_rows, col=1)
     fig.update_layout(template="cyborg", height=160 * num_rows, font_family="Inter", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False, margin=dict(l=60, r=20, t=20, b=65))
@@ -697,7 +765,7 @@ def update_main_timeline(apply_clicks, reset_clicks, n_intervals, elev_mask, tim
     date_str = max_loc.strftime('%b %d, %Y')
     if timeline_start.date() != max_loc.date():
         date_str = f"{timeline_start.strftime('%b %d')} - {max_loc.strftime('%b %d, %Y')}"
-    xaxis_title = f"Local Time (PET, UTC-5) | Date: {date_str}"
+    xaxis_title = f"Local Time ({STATION_TZ}) | Date: {date_str}"
 
     fig_main.update_layout(
         template="cyborg", height=500, font_family="Inter", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -709,6 +777,57 @@ def update_main_timeline(apply_clicks, reset_clicks, n_intervals, elev_mask, tim
         legend=dict(orientation="h", yanchor="top", y=0.98, xanchor="center", x=0.5, bordercolor="rgba(255,255,255,0.1)", bgcolor="rgba(0,0,0,0.4)")
     )
     return fig_main, html.Span(GLOBAL_STATUS)
+
+# 6. Mobile Tab Switching (clientside - no server round-trip)
+app.clientside_callback(
+    """
+    function(sky_clicks, timeline_clicks, detail_clicks) {
+        // Determine which tab was clicked
+        var triggered = dash_clientside.callback_context.triggered;
+        if (!triggered || triggered.length === 0) return dash_clientside.no_update;
+
+        var tab_id = triggered[0].prop_id.split('.')[0];
+        var tab_map = {
+            'tab-btn-skyplot': 'panel-skyplot',
+            'tab-btn-timeline': 'panel-timeline',
+            'tab-btn-detail': 'panel-detail'
+        };
+
+        // Toggle panels
+        var panels = ['panel-skyplot', 'panel-timeline', 'panel-detail'];
+        panels.forEach(function(pid) {
+            var el = document.getElementById(pid);
+            if (el) {
+                if (pid === tab_map[tab_id]) {
+                    el.classList.add('mobile-active');
+                } else {
+                    el.classList.remove('mobile-active');
+                }
+            }
+        });
+
+        // Toggle button active state
+        var btns = ['tab-btn-skyplot', 'tab-btn-timeline', 'tab-btn-detail'];
+        btns.forEach(function(bid) {
+            var el = document.getElementById(bid);
+            if (el) {
+                if (bid === tab_id) {
+                    el.classList.add('active');
+                } else {
+                    el.classList.remove('active');
+                }
+            }
+        });
+
+        return tab_map[tab_id] || dash_clientside.no_update;
+    }
+    """,
+    Output('mobile-active-tab', 'data'),
+    [Input('tab-btn-skyplot', 'n_clicks'),
+     Input('tab-btn-timeline', 'n_clicks'),
+     Input('tab-btn-detail', 'n_clicks')],
+    prevent_initial_call=True
+)
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8050))

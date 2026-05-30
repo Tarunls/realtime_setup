@@ -16,9 +16,11 @@ read -p "🌎 Enter the station latitude (e.g., 11.95°S): " STATION_LAT
 read -p "🌎 Enter the station longitude (e.g., 76.87°W): " STATION_LON
 STATION_LOCATION="${STATION_LAT}, ${STATION_LON}"
 
+read -p "🕐 Enter the station timezone (e.g., America/Lima, America/Chicago, UTC): " STATION_TIMEZONE
+
 # Fixed Cloud Variables
 RG_NAME="scintpi-rg"
-LOCATION="southcentralus"
+LOCATION="centralus"
 PLAN_NAME="scintpi-app-plan"
 WEBAPP_NAME="scintpi-dash-${CLEAN_ID}"
 STORAGE_ACC_NAME="scintpistorg${CLEAN_ID}"
@@ -41,10 +43,10 @@ fi
 # --- 2.6 AZURE LOGIN ---
 echo "-------------------------------------------------------------------"
 echo "🔐 You need to log in to your Azure account."
-echo "   A browser window will open (or you'll get a device code)."
-echo "   Complete the sign-in and then return here."
+echo "   A device code will be displayed below."
+echo "   Visit https://microsoft.com/devicelogin and enter the code."
 echo "-------------------------------------------------------------------"
-az login
+az login --use-device-code
 if [ $? -ne 0 ]; then
     echo "❌ Azure login failed. Cannot continue without authentication."
     exit 1
@@ -88,6 +90,7 @@ sed -i "s|AZURE_CONNECTION_STRING=\"\"|AZURE_CONNECTION_STRING=\"$AZURE_CONN_STR
 echo "📍 Injecting station info into website_code/finazure.py..."
 sed -i "s|__STATION_NAME__|$STATION_NAME|g" website_code/finazure.py
 sed -i "s|__STATION_LOCATION__|$STATION_LOCATION|g" website_code/finazure.py
+sed -i "s|__STATION_TIMEZONE__|$STATION_TIMEZONE|g" website_code/finazure.py
 
 # --- 5. CONFIGURE LOCAL RASPBERRY PI CRONTAB & START REALTIME ---
 echo "⏰ Setting up Raspberry Pi automated Cron jobs..."
