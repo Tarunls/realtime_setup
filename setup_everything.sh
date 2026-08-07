@@ -1,169 +1,359 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
 # ==============================================================================
-# SCINTPI: THE TRUE ALL-IN-ONE SCRIPT (STORAGE + PI + WEB APP)
+# SCINTPI: ALL-IN-ONE STATION SETUP (STORAGE + PI + WEB APP)
 # ==============================================================================
 
-echo "🚀 Initiating Full ScintPi Deployment Pipeline..."
+trap 'echo "❌ Setup stopped on line $LINENO while running: $BASH_COMMAND" >&2' ERR
 
-# --- 1. PROMPT FOR USER INPUTS ---
-read -p "🌐 Enter a unique ID for this station (e.g., node2, alpha, dallas1): " STATION_ID
-# Storage accounts must be lowercase alphanumeric only, max 24 chars
-CLEAN_ID=$(echo "$STATION_ID" | tr -dc 'a-z0-9' | cut -c 1-10)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DATA_LOG_DIR="$SCRIPT_DIR/data_log"
+CODE_DIR="$SCRIPT_DIR/website_code"
+RETENTION_SCRIPT="$SCRIPT_DIR/setup_storage_retention.sh"
 
-read -p "📍 Enter the station name (e.g., Jicamarca Radio Observatory): " STATION_NAME
-read -p "🌎 Enter the station latitude (e.g., 11.95°S): " STATION_LAT
-read -p "🌎 Enter the station longitude (e.g., 76.87°W): " STATION_LON
-STATION_LOCATION="${STATION_LAT}, ${STATION_LON}"
-
-read -p "🕐 Enter the station timezone (e.g., America/Lima, America/Chicago, UTC): " STATION_TIMEZONE
-
-# Fixed Cloud Variables
 RG_NAME="scintpi-rg"
 LOCATION="centralus"
 PLAN_NAME="scintpi-app-plan"
-WEBAPP_NAME="scintpi-dash-${CLEAN_ID}"
-STORAGE_ACC_NAME="scintpistorg${CLEAN_ID}"
 CONTAINER_NAME="scintpi"
+MOUNT_NAME="ScintPiDataMount"
+MOUNT_PATH="/mounts/scintpidata"
 
-# --- 2. INSTALL LOCAL RASPBERRY PI DEPENDENCIES ---
-echo "📦 Installing required Python libraries for the Raspberry Pi..."
-sudo apt-get update -y
-sudo apt-get install -y python3-pip curl
-pip3 install azure-storage-blob --break-system-packages 2>/dev/null || pip3 install azure-storage-blob
+usage() {
+    cat <<'EOF'
+Usage:
+  ./setup_everything.sh
 
-# --- 2.5 INSTALL AZURE CLI ---
-if ! command -v az &> /dev/null; then
-    echo "☁️  Azure CLI not found. Installing..."
-    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-else
-    echo "✅ Azure CLI already installed ($(az version --query '\"azure-cli\"' -o tsv))."
-fi
+Run this from the realtime_setup project on a 64-bit Raspberry Pi. The script
+prompts for station details and confirms the active Azure subscription before
+making changes. It may be rerun safely after a partial setup.
+EOF
+}
 
-# --- 2.6 AZURE LOGIN ---
-echo "-------------------------------------------------------------------"
-echo "🔐 You need to log in to your Azure account."
-echo "   A device code will be displayed below."
-echo "   Visit https://microsoft.com/devicelogin and enter the code."
-echo "-------------------------------------------------------------------"
-az login --use-device-code
-if [ $? -ne 0 ]; then
-    echo "❌ Azure login failed. Cannot continue without authentication."
+case "${1:-}" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    "")
+        ;;
+    *)
+        echo "Unknown argument: $1" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+
+require_project_file() {
+    if [[ ! -e "$1" ]]; then
+        echo "❌ Required project file is missing: $1" >&2
+        exit 1
+    fi
+}
+
+azure_resource_exists() {
+    az "$@" --output none >/dev/null 2>&1
+}
+
+require_project_file "$DATA_LOG_DIR/realtime_2026"
+require_project_file "$DATA_LOG_DIR/automation.py"
+require_project_file "$CODE_DIR/finazure.py"
+require_project_file "$CODE_DIR/requirements.txt"
+require_project_file "$RETENTION_SCRIPT"
+
+machine_arch="$(uname -m)"
+case "$machine_arch" in
+    aarch64|arm64) ;;
+    *)
+        echo "❌ realtime_2026 is built for 64-bit ARM Linux, but this machine is $machine_arch." >&2
+        echo "   Run this setup on a 64-bit Raspberry Pi." >&2
+        exit 1
+        ;;
+esac
+
+echo "🚀 Starting ScintPi station setup..."
+
+read -r -p "🌐 Unique station ID (for example utd or jicamarca): " station_id_input
+CLEAN_ID="$(printf '%s' "$station_id_input" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
+if [[ ${#CLEAN_ID} -lt 3 || ${#CLEAN_ID} -gt 12 ]]; then
+    echo "❌ Station ID must become 3–12 lowercase letters/numbers after cleaning." >&2
     exit 1
 fi
-echo "✅ Azure login successful!"
 
-# --- 3. CREATE AZURE STORAGE AND GET KEYS ---
-echo "☁️  Creating Azure Resource Group..."
-az group create --name $RG_NAME --location $LOCATION --output none
+read -r -p "📍 Station name (for example Jicamarca Radio Observatory): " STATION_NAME
+read -r -p "🌎 Station latitude (for example 11.95°S): " STATION_LAT
+read -r -p "🌎 Station longitude (for example 76.87°W): " STATION_LON
+read -r -p "🕐 IANA timezone (for example America/Lima or America/Chicago): " STATION_TIMEZONE
 
-echo "📦 Provisioning Storage Account ($STORAGE_ACC_NAME)..."
-az storage account create \
-    --name $STORAGE_ACC_NAME \
-    --resource-group $RG_NAME \
-    --location $LOCATION \
-    --sku Standard_LRS \
+for required_value in "$STATION_NAME" "$STATION_LAT" "$STATION_LON" "$STATION_TIMEZONE"; do
+    if [[ -z "$required_value" ]]; then
+        echo "❌ Station name, coordinates, and timezone cannot be blank." >&2
+        exit 1
+    fi
+done
+
+STATION_LOCATION="${STATION_LAT}, ${STATION_LON}"
+WEBAPP_NAME="scintpi-dash-${CLEAN_ID}"
+STORAGE_ACC_NAME="scintpistorg${CLEAN_ID}"
+
+echo "📦 Installing Raspberry Pi dependencies..."
+sudo apt-get update -y
+sudo apt-get install -y ca-certificates cron curl python3-pip tzdata zip
+pip3 install azure-storage-blob --break-system-packages 2>/dev/null \
+    || pip3 install azure-storage-blob
+
+if ! python3 - "$STATION_TIMEZONE" <<'PY'
+import sys
+from zoneinfo import ZoneInfo
+
+try:
+    ZoneInfo(sys.argv[1])
+except Exception:
+    raise SystemExit(1)
+PY
+then
+    echo "❌ '$STATION_TIMEZONE' is not a valid IANA timezone." >&2
+    exit 1
+fi
+
+if ! command -v az >/dev/null 2>&1; then
+    echo "☁️  Installing Azure CLI..."
+    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+fi
+
+if ! az account show >/dev/null 2>&1; then
+    echo "🔐 Azure login is required. Follow the displayed device-login instructions."
+    az login --use-device-code --output none
+fi
+
+if [[ -n "${AZURE_SUBSCRIPTION:-}" ]]; then
+    az account set --subscription "$AZURE_SUBSCRIPTION"
+fi
+
+subscription_name="$(az account show --query name --output tsv)"
+subscription_id="$(az account show --query id --output tsv)"
+echo "Azure subscription: $subscription_name ($subscription_id)"
+read -r -p "Continue in this subscription? [y/N]: " confirm_subscription
+if [[ ! "$confirm_subscription" =~ ^[Yy]$ ]]; then
+    echo "Setup cancelled. Select the intended subscription and run this script again."
+    exit 0
+fi
+
+echo "☁️  Creating or reusing resource group $RG_NAME..."
+az group create \
+    --name "$RG_NAME" \
+    --location "$LOCATION" \
     --output none
 
-echo "🔑 Retrieving Connection Strings automatically..."
-AZURE_CONN_STR=$(az storage account show-connection-string \
-    --name $STORAGE_ACC_NAME \
-    --resource-group $RG_NAME \
-    --query connectionString \
-    --output tsv)
+if azure_resource_exists storage account show \
+    --name "$STORAGE_ACC_NAME" \
+    --resource-group "$RG_NAME"; then
+    echo "📦 Reusing storage account $STORAGE_ACC_NAME."
+else
+    name_available="$(az storage account check-name \
+        --name "$STORAGE_ACC_NAME" \
+        --query nameAvailable \
+        --output tsv)"
+    if [[ "$name_available" != "true" ]]; then
+        echo "❌ Storage account name $STORAGE_ACC_NAME is already used outside this setup." >&2
+        echo "   Choose a different station ID." >&2
+        exit 1
+    fi
+    echo "📦 Creating storage account $STORAGE_ACC_NAME..."
+    az storage account create \
+        --name "$STORAGE_ACC_NAME" \
+        --resource-group "$RG_NAME" \
+        --location "$LOCATION" \
+        --sku Standard_LRS \
+        --output none
+fi
 
-echo "🪣 Initializing Blob Container ($CONTAINER_NAME)..."
+AZURE_CONN_STR="$(az storage account show-connection-string \
+    --name "$STORAGE_ACC_NAME" \
+    --resource-group "$RG_NAME" \
+    --query connectionString \
+    --output tsv)"
+ACCT_NAME="$(printf '%s' "$AZURE_CONN_STR" | sed -n 's/.*AccountName=\([^;]*\).*/\1/p')"
+ACCT_KEY="$(printf '%s' "$AZURE_CONN_STR" | sed -n 's/.*AccountKey=\([^;]*\).*/\1/p')"
+
+echo "🪣 Creating or reusing blob container $CONTAINER_NAME..."
 az storage container create \
-    --name $CONTAINER_NAME \
+    --name "$CONTAINER_NAME" \
     --connection-string "$AZURE_CONN_STR" \
     --output none
 
-# Extract Account Name and Key from Connection String (Needed for the storage mount later)
-ACCT_NAME=$(echo "$AZURE_CONN_STR" | sed -n 's/.*AccountName=\([^;]*\).*/\1/p')
-ACCT_KEY=$(echo "$AZURE_CONN_STR" | sed -n 's/.*AccountKey=\([^;]*\).*/\1/p')
+echo "🧹 Limiting Azure data storage to a 72-hour rolling buffer..."
+"$RETENTION_SCRIPT" "$RG_NAME/$STORAGE_ACC_NAME"
 
-# --- 4. INJECT CONNECTION STRING INTO AUTOMATION.PY ---
-echo "⚙️  Injecting credentials into data_log/automation.py..."
-sed -i "s|AZURE_CONNECTION_STRING=\"\"|AZURE_CONNECTION_STRING=\"$AZURE_CONN_STR\"|g" data_log/automation.py
+echo "⚙️  Updating the uploader connection..."
+python3 - "$DATA_LOG_DIR/automation.py" "$AZURE_CONN_STR" <<'PY'
+import pathlib
+import re
+import sys
 
-# --- 4.5 INJECT STATION NAME & LOCATION INTO DASHBOARD ---
-echo "📍 Injecting station info into website_code/finazure.py..."
-sed -i "s|__STATION_NAME__|$STATION_NAME|g" website_code/finazure.py
-sed -i "s|__STATION_LOCATION__|$STATION_LOCATION|g" website_code/finazure.py
-sed -i "s|__STATION_TIMEZONE__|$STATION_TIMEZONE|g" website_code/finazure.py
+path = pathlib.Path(sys.argv[1])
+connection_string = sys.argv[2]
+source = path.read_text()
+updated, count = re.subn(
+    r'''(?m)^\s*AZURE_CONNECTION_STRING\s*=\s*(?:".*"|'.*')\s*$''',
+    f'    AZURE_CONNECTION_STRING={connection_string!r}',
+    source,
+)
+if count != 1:
+    raise SystemExit(
+        f"Expected one AZURE_CONNECTION_STRING assignment in {path}; found {count}."
+    )
+path.write_text(updated)
+PY
 
-# --- 5. CONFIGURE LOCAL RASPBERRY PI CRONTAB & START REALTIME ---
-echo "⏰ Setting up Raspberry Pi automated Cron jobs..."
-CURRENT_DIR="$(pwd)"
+echo "⏰ Installing idempotent Raspberry Pi cron entries..."
+chmod +x "$DATA_LOG_DIR/realtime_2026" "$DATA_LOG_DIR/automation.py"
+quoted_project_dir="$(printf '%q' "$SCRIPT_DIR")"
+existing_cron="$(crontab -l 2>/dev/null || true)"
+filtered_cron="$(printf '%s\n' "$existing_cron" \
+    | awk '!/realtime_2026/ && !/data_log\/automation\.py/')"
+{
+    if [[ -n "$filtered_cron" ]]; then
+        printf '%s\n' "$filtered_cron"
+    fi
+    printf '@reboot cd %s && ./data_log/realtime_2026 >> data_log/realtime_2026.log 2>&1\n' "$quoted_project_dir"
+    printf '*/5 * * * * cd %s && /usr/bin/python3 data_log/automation.py >> data_log/upload.log 2>&1\n' "$quoted_project_dir"
+} | crontab -
 
-chmod +x data_log/realtime_2026
-chmod +x data_log/automation.py
-
-crontab -l 2>/dev/null | grep -v 'realtime_2026' | grep -v 'automation.py' | crontab -
-(crontab -l 2>/dev/null; echo "@reboot cd $CURRENT_DIR && ./data_log/realtime_2026") | crontab -
-(crontab -l 2>/dev/null; echo "*/5 * * * * cd $CURRENT_DIR && /usr/bin/python3 data_log/automation.py") | crontab -
-
-echo "-------------------------------------------------------------------"
-echo "⚠️  MANUAL REVIEW REQUIRED"
-echo "Old data logging scripts or conflicting cron jobs might still be active."
-read -p "Would you like to open your crontab now to review/edit? (y/n): " EDIT_CRON
-
-if [[ "$EDIT_CRON" =~ ^[Yy]$ ]]; then
+echo "⚠️  Review the crontab if this Pi previously ran other data-logging scripts."
+read -r -p "Open the crontab editor now? [y/N]: " edit_cron
+if [[ "$edit_cron" =~ ^[Yy]$ ]]; then
     crontab -e
-    echo "✅ Crontab review complete. Resuming deployment..."
-else
-    echo "⏭️  Skipping manual crontab review..."
 fi
-echo "-------------------------------------------------------------------"
 
-echo "▶️  Starting realtime_2026 data collection in the background..."
-pkill realtime_2026 2>/dev/null || true
-cd "$CURRENT_DIR" && nohup ./data_log/realtime_2026 > /dev/null 2>&1 &
+echo "▶️  Starting data collection..."
+pkill -x realtime_2026 2>/dev/null || true
+(
+    cd "$SCRIPT_DIR"
+    nohup ./data_log/realtime_2026 >> data_log/realtime_2026.log 2>&1 &
+)
 
-# --- 6. CLOUD INFRASTRUCTURE: APP SERVICE PLAN & WEB APP ---
-echo "☁️  Provisioning Azure App Service Web App ($WEBAPP_NAME)..."
-az appservice plan create --name $PLAN_NAME --resource-group $RG_NAME --sku B1 --is-linux --location $LOCATION --output none
-az webapp create --resource-group $RG_NAME --plan $PLAN_NAME --name $WEBAPP_NAME --runtime "PYTHON:3.10" --output none
+if azure_resource_exists appservice plan show \
+    --name "$PLAN_NAME" \
+    --resource-group "$RG_NAME"; then
+    echo "☁️  Reusing App Service plan $PLAN_NAME."
+else
+    echo "☁️  Creating App Service plan $PLAN_NAME..."
+    az appservice plan create \
+        --name "$PLAN_NAME" \
+        --resource-group "$RG_NAME" \
+        --sku B1 \
+        --is-linux \
+        --location "$LOCATION" \
+        --output none
+fi
 
-# --- 7. MOUNT AZURE BLOB STORAGE TO THE WEB APP ---
-echo "🪣 Mounting Blob Storage directly to Web App (/mounts/scintpidata)..."
-az webapp config storage-account add \
-    --resource-group $RG_NAME \
-    --name $WEBAPP_NAME \
-    --custom-id ScintPiDataMount \
-    --storage-type AzureBlob \
-    --share-name scintpi \
-    --account-name "$ACCT_NAME" \
-    --access-key "$ACCT_KEY" \
-    --mount-path /mounts/scintpidata \
+if azure_resource_exists webapp show \
+    --resource-group "$RG_NAME" \
+    --name "$WEBAPP_NAME"; then
+    echo "🌐 Reusing web app $WEBAPP_NAME."
+else
+    echo "🌐 Creating web app $WEBAPP_NAME..."
+    az webapp create \
+        --resource-group "$RG_NAME" \
+        --plan "$PLAN_NAME" \
+        --name "$WEBAPP_NAME" \
+        --runtime "PYTHON:3.10" \
+        --output none
+fi
+
+mount_exists="$(az webapp config storage-account list \
+    --resource-group "$RG_NAME" \
+    --name "$WEBAPP_NAME" \
+    --query "[?name=='$MOUNT_NAME'] | length(@)" \
+    --output tsv)"
+
+echo "🪣 Configuring the dashboard data mount..."
+if [[ "$mount_exists" == "0" ]]; then
+    az webapp config storage-account add \
+        --resource-group "$RG_NAME" \
+        --name "$WEBAPP_NAME" \
+        --custom-id "$MOUNT_NAME" \
+        --storage-type AzureBlob \
+        --share-name "$CONTAINER_NAME" \
+        --account-name "$ACCT_NAME" \
+        --access-key "$ACCT_KEY" \
+        --mount-path "$MOUNT_PATH" \
+        --output none
+else
+    az webapp config storage-account update \
+        --resource-group "$RG_NAME" \
+        --name "$WEBAPP_NAME" \
+        --custom-id "$MOUNT_NAME" \
+        --storage-type AzureBlob \
+        --share-name "$CONTAINER_NAME" \
+        --account-name "$ACCT_NAME" \
+        --access-key "$ACCT_KEY" \
+        --mount-path "$MOUNT_PATH" \
+        --output none
+fi
+
+echo "🔧 Configuring the web app..."
+az webapp config appsettings set \
+    --resource-group "$RG_NAME" \
+    --name "$WEBAPP_NAME" \
+    --settings \
+        DATA_MOUNT_PATH="$MOUNT_PATH" \
+        STATION_NAME="$STATION_NAME" \
+        STATION_LOCATION="$STATION_LOCATION" \
+        STATION_TIMEZONE="$STATION_TIMEZONE" \
+        HEALTH_WINDOW_HOURS=24 \
+        HEALTH_COVERAGE_THRESHOLD=0.90 \
+        WEBSITE_HEALTHCHECK_MAXPINGFAILURES=10 \
+        SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+        WEBSITES_CONTAINER_START_TIME_LIMIT=1800 \
+        WEBSITES_PORT=8000 \
     --output none
 
-# --- 8. INJECT ENVIRONMENT VARIABLES ---
-echo "🔧 Setting Web App Environment Variables..."
-az webapp config appsettings set --resource-group $RG_NAME --name $WEBAPP_NAME --settings \
-    DATA_MOUNT_PATH=/mounts/scintpidata \
-    SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-    WEBSITES_CONTAINER_START_TIME_LIMIT=1800 \
-    WEBSITES_PORT=8050 \
+az webapp config set \
+    --resource-group "$RG_NAME" \
+    --name "$WEBAPP_NAME" \
+    --linux-fx-version "PYTHON|3.10" \
+    --startup-file "gunicorn --bind=0.0.0.0:8000 --timeout 1800 --access-logfile - --error-logfile - finazure:server" \
+    --always-on true \
+    --http20-enabled true \
+    --min-tls-version 1.2 \
     --output none
 
-# --- 9. PACKAGE AND DEPLOY THE DASHBOARD ---
-echo "📦 Packaging finazure.py and requirements.txt..."
-cd "$CURRENT_DIR/website_code"
-zip "$CURRENT_DIR/deployment.zip" finazure.py requirements.txt
-cd "$CURRENT_DIR"
+temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/scintpi-setup.XXXXXX")"
+trap 'rm -rf "$temp_dir"' EXIT
+archive="$temp_dir/scintpi-dashboard.zip"
+(
+    cd "$CODE_DIR"
+    zip -q -j "$archive" finazure.py requirements.txt
+)
 
-echo "🚀 Deploying code to Azure Web App (This may take a few minutes)..."
-az webapp deployment source config-zip --resource-group $RG_NAME --name $WEBAPP_NAME --src deployment.zip
-
-# --- 10. SET CUSTOM STARTUP COMMAND ---
-echo "🏁 Setting the Gunicorn startup command..."
-az webapp config set --resource-group $RG_NAME --name $WEBAPP_NAME \
-    --startup-file 'sh -c "pip install -r requirements.txt && gunicorn --bind=0.0.0.0:8050 --timeout 1800 finazure:server"' \
+echo "🚀 Deploying the dashboard..."
+az webapp deploy \
+    --resource-group "$RG_NAME" \
+    --name "$WEBAPP_NAME" \
+    --src-path "$archive" \
+    --type zip \
+    --track-status true \
+    --timeout 1800 \
     --output none
+
+dashboard_url="https://${WEBAPP_NAME}.azurewebsites.net"
+echo "🔎 Checking the dashboard response..."
+if curl --fail --silent --show-error \
+    --retry 6 \
+    --retry-all-errors \
+    --retry-delay 10 \
+    --max-time 30 \
+    "$dashboard_url" >/dev/null; then
+    echo "✅ Dashboard responded successfully."
+else
+    echo "⚠️  Deployment finished, but the dashboard did not respond yet." >&2
+    echo "   Check its App Service logs if it remains unavailable." >&2
+fi
 
 echo "==================================================================="
-echo "✅ PIPELINE COMPLETE!"
-echo "📡 Raspberry Pi is capturing data and syncing every 5 minutes."
-echo "🌐 Your dashboard is live at: https://$WEBAPP_NAME.azurewebsites.net"
+echo "✅ SETUP COMPLETE"
+echo "📡 Data collection is running and uploads are scheduled every 5 minutes."
+echo "🌐 Dashboard: $dashboard_url"
 echo "==================================================================="
