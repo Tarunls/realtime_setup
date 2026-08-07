@@ -1055,7 +1055,7 @@ def display_details(
         if not sat_df['TEC'].dropna().empty:
             diffs = sat_df['TEC'].diff().fillna(0)
             slips = diffs.copy()
-            slips[slips.abs() <= 5.0] = 0
+            slips[slips.abs() <= 3.0] = 0
             sat_df['TEC'] = sat_df['TEC'] - slips.cumsum()
             sat_df.loc[low_elev_mask, 'TEC'] = np.nan
 
