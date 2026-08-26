@@ -1191,7 +1191,7 @@ static int decode_ubx(raw_t *raw)
     /* checksum function updated*/
     if (!checksum(raw->buff,raw->len)) {
         return -1;
-    }x  
+    }  
     switch (type) {
         case ID_RXMRAWX : return decode_rxmrawx(raw);
         case ID_NAVPVT  : return decode_navpvt(raw);
