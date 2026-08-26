@@ -33,7 +33,19 @@ logger = logging.getLogger(__name__)
 SYSTEM_MAP = {
     0: "GPS", 1: "SBAS", 2: "Galileo", 3: "BeiDou", 6: "GLONASS"
 }
-TEC_CONVERSION_FACTOR = 9.5196 
+# Signal frequencies used by ScintKit for its inferred frequency-1/frequency-2
+# pair. Values are MHz; the TEC equations convert them to Hz.
+SYSTEM_FREQUENCIES_MHZ = {
+    "GPS": (1575.42, 1227.60),       # GPS L1 C/A, L2C
+    "SBAS": (1575.42, 1176.45),      # GEO/SBAS L1, L5
+    "Galileo": (1575.42, 1207.14),   # Galileo E1, E5b
+    "BeiDou": (1561.098, 1207.14),   # BeiDou B1I, B2I
+    "GLONASS": (1602.00, 1246.00),   # GLONASS L1 C/A, L2C
+}
+SPEED_OF_LIGHT_MPS = 299792458.0
+TEC_REPAIR_THRESHOLD_TECU = 1.0
+TEC_MAX_GAP = pd.Timedelta("5min")
+TEC_VALID_RANGE_TECU = (-50.0, 250.0)
 TEC_MINIMUM_VISIBLE_SPAN = 20.0
 STATION_NAME = os.getenv("STATION_NAME", "ScintPi Station")
 STATION_LOCATION = os.getenv("STATION_LOCATION", "Location not configured")
@@ -147,6 +159,163 @@ def default_manual_window(hours):
         end_utc = GLOBAL_DF["datetime"].max().tz_localize("UTC")
     start_utc = end_utc - pd.Timedelta(hours=hours)
     return start_utc.strftime("%H:%M"), end_utc.strftime("%H:%M")
+
+
+def add_signal_frequencies(df):
+    """Add the ScintKit frequency-1/frequency-2 pair in MHz."""
+    frequencies = df["system"].map(SYSTEM_FREQUENCIES_MHZ)
+    df["freq_1"] = frequencies.map(
+        lambda pair: pair[0] if isinstance(pair, tuple) else np.nan
+    )
+    df["freq_2"] = frequencies.map(
+        lambda pair: pair[1] if isinstance(pair, tuple) else np.nan
+    )
+    return df
+
+
+def carrier_phase_tec(phi1_cycles, phi2_cycles, freq1_hz, freq2_hz):
+    """Return dual-frequency carrier-phase TEC in TECU (ScintKit equation)."""
+    wavelength_1 = SPEED_OF_LIGHT_MPS / freq1_hz
+    wavelength_2 = SPEED_OF_LIGHT_MPS / freq2_hz
+    phase_1_m = phi1_cycles * wavelength_1
+    phase_2_m = phi2_cycles * wavelength_2
+    tec_factor = (
+        (freq1_hz**2 * freq2_hz**2)
+        / (40.3 * (freq1_hz**2 - freq2_hz**2))
+    )
+    return tec_factor * (phase_1_m - phase_2_m) / 1e16
+
+
+def pseudorange_tec(range1_m, range2_m, freq1_hz, freq2_hz):
+    """Return dual-frequency pseudorange TEC in TECU (ScintKit equation)."""
+    tec_factor = (
+        (freq1_hz**2 * freq2_hz**2)
+        / (40.3 * (freq1_hz**2 - freq2_hz**2))
+    )
+    return tec_factor * (range2_m - range1_m) / 1e16
+
+
+def repair_discontinuities_pos(values, threshold=TEC_REPAIR_THRESHOLD_TECU):
+    """Repair cycle-slip steps using ScintKit's rolling-increment method.
+
+    The real-time CSV contains one aggregate per minute, so the ten-sample
+    rolling window here corresponds to ten real-time observations.
+    """
+    series = pd.to_numeric(pd.Series(values), errors="coerce").copy()
+    finite = series.notna().to_numpy()
+    slip_mask = pd.Series(False, index=series.index)
+    if not finite.any():
+        return series, slip_mask, 0
+
+    increments = series.diff()
+    trend = (
+        increments.rolling(window=10, center=True, min_periods=3)
+        .median()
+        .bfill()
+        .ffill()
+    )
+    residual = (increments - trend).abs()
+    good = residual.le(threshold) | residual.isna()
+    slip_mask = ~good
+    n_slips = int(slip_mask.sum())
+
+    # Preserve ScintKit's fail-safe: do not reconstruct a series when more
+    # than 20% of a sufficiently long arc looks discontinuous.
+    if n_slips / len(series) > 0.2 and len(series) > 10:
+        return series, slip_mask, n_slips
+
+    clean_increments = increments.where(good, np.nan)
+    repaired = pd.Series(np.nan, index=series.index, dtype=float)
+
+    # Reconstruct each finite block independently so NaN gaps are retained.
+    padded = np.r_[False, finite, False]
+    starts = np.flatnonzero(~padded[:-1] & padded[1:])
+    stops = np.flatnonzero(padded[:-1] & ~padded[1:])
+    for start, stop in zip(starts, stops):
+        repaired.iloc[start] = series.iloc[start]
+        if start + 1 < stop:
+            block_increments = clean_increments.iloc[start + 1:stop]
+            block_increments = block_increments.interpolate(
+                limit_direction="both"
+            ).fillna(0.0)
+            repaired.iloc[start + 1:stop] = (
+                series.iloc[start] + block_increments.cumsum()
+            ).to_numpy()
+
+    return repaired, slip_mask, n_slips
+
+
+def add_carrier_phase_tec(df, max_gap=TEC_MAX_GAP):
+    """Compute ScintKit-style L1/L2 TEC independently for each satellite arc."""
+    df = add_signal_frequencies(df.copy())
+    df["TEC"] = np.nan
+
+    for _, satellite in df.groupby(["system", "prn"], sort=False):
+        satellite = satellite.sort_values("datetime", kind="stable")
+        phase_1 = satellite["l_f1"].replace(0, np.nan)
+        phase_2 = satellite["l_f2"].replace(0, np.nan)
+        range_1 = satellite["p_f1"].replace(0, np.nan)
+        range_2 = satellite["p_f2"].replace(0, np.nan)
+        freq_1_hz = satellite["freq_1"] * 1e6
+        freq_2_hz = satellite["freq_2"] * 1e6
+
+        frequency_valid = (
+            freq_1_hz.notna()
+            & freq_2_hz.notna()
+            & freq_1_hz.ne(freq_2_hz)
+        )
+        carrier_valid = phase_1.notna() & phase_2.notna() & frequency_valid
+        pseudorange_valid = range_1.notna() & range_2.notna() & frequency_valid
+
+        carrier_raw = carrier_phase_tec(
+            phase_1.where(carrier_valid),
+            phase_2.where(carrier_valid),
+            freq_1_hz.where(carrier_valid),
+            freq_2_hz.where(carrier_valid),
+        )
+        pseudorange_raw = pseudorange_tec(
+            range_1.where(pseudorange_valid),
+            range_2.where(pseudorange_valid),
+            freq_1_hz.where(pseudorange_valid),
+            freq_2_hz.where(pseudorange_valid),
+        )
+
+        times = pd.to_datetime(satellite["datetime"], errors="coerce")
+        new_segment = times.diff().gt(max_gap) | times.isna()
+        previous_carrier_time = times.where(carrier_valid).ffill().shift()
+        new_segment |= (
+            carrier_valid
+            & times.sub(previous_carrier_time).gt(max_gap)
+        )
+        new_segment.iloc[0] = False
+        segment_ids = new_segment.cumsum()
+
+        for segment_index in segment_ids.groupby(
+            segment_ids, sort=False
+        ).groups.values():
+            segment_index = pd.Index(segment_index)
+            carrier_segment, _, _ = repair_discontinuities_pos(
+                carrier_raw.loc[segment_index]
+            )
+            pseudorange_segment, _, _ = repair_discontinuities_pos(
+                pseudorange_raw.loc[segment_index]
+            )
+
+            # Carrier phase supplies the precise TEC variation, while the
+            # simultaneous pseudorange median resolves its unknown offset.
+            common_valid = carrier_segment.notna() & pseudorange_segment.notna()
+            if not common_valid.any():
+                continue
+            carrier_segment += (
+                pseudorange_segment.loc[common_valid].median()
+                - carrier_segment.loc[common_valid].median()
+            )
+            df.loc[segment_index, "TEC"] = carrier_segment.to_numpy()
+
+    # Preserve the dashboard's existing physical plausibility screen. Bad
+    # receiver epochs can contain finite but impossible phase/range values.
+    df.loc[~df["TEC"].between(*TEC_VALID_RANGE_TECU), "TEC"] = np.nan
+    return df
 
 # Initialize Dash
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG], 
@@ -341,7 +510,7 @@ app.index_string = '''
 def read_local_csv(filepath):
     try:
         clean_headers = ['week', 'tow_min', 'prn', 'const', 'elev', 'az', 'n_l1', 's4_f1', 'p_f1', 'l_f1', 'n_l2', 's4_f2', 'p_f2', 'l_f2']
-        df_chunk = pd.read_csv(filepath, header=0, names=clean_headers + ['junk'], usecols=clean_headers)
+        df_chunk = pd.read_csv(filepath, header=0, names=clean_headers, usecols=clean_headers)
 
         if 'week' in df_chunk.columns and 'tow_min' in df_chunk.columns:
             df_chunk['week'] = pd.to_numeric(df_chunk['week'], errors='coerce')
@@ -389,7 +558,10 @@ def fetch_and_process_local_data():
         if 'const' not in df.columns:
             return pd.DataFrame()
 
-        cols_to_coerce = ['prn', 'elev', 'az', 's4_f1', 's4_f2', 's4', 'p_f1', 'p_f2', 'n_l1', 'n_l2']
+        cols_to_coerce = [
+            'prn', 'elev', 'az', 's4_f1', 's4_f2', 's4',
+            'p_f1', 'p_f2', 'l_f1', 'l_f2', 'n_l1', 'n_l2',
+        ]
         for col in cols_to_coerce:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -427,11 +599,17 @@ def fetch_and_process_local_data():
         df = df[(df['time_diff'] >= pd.Timedelta(seconds=30)) | (df['time_diff'].isna())]
         df = df.drop(columns=['time_diff'])
 
-        df['TEC'] = None
-        if 'p_f1' in df.columns and 'p_f2' in df.columns:
-            mask = (df['p_f2'] > 0) & (df['p_f1'] > 0) & (df['p_f2'].notna()) & (df['p_f1'].notna())
-            df.loc[mask, 'TEC'] = (df.loc[mask, 'p_f2'] - df.loc[mask, 'p_f1']) * TEC_CONVERSION_FACTOR
-            df.loc[(df['TEC'] > 250) | (df['TEC'] < -50), 'TEC'] = None
+        df = add_carrier_phase_tec(df)
+        dual_phase_rows = (
+            df['l_f1'].replace(0, np.nan).notna()
+            & df['l_f2'].replace(0, np.nan).notna()
+        )
+        logger.info(
+            "Carrier-phase TEC: %d/%d valid TEC rows from %d dual-phase rows",
+            int(df['TEC'].notna().sum()),
+            len(df),
+            int(dual_phase_rows.sum()),
+        )
             
         if 'n_l1' in df.columns:
             if 's4_f1' in df.columns: df.loc[df['n_l1'] < 100, 's4_f1'] = None
@@ -1049,15 +1227,10 @@ def display_details(
             if col in sat_df.columns:
                 sat_df.loc[low_elev_mask, col] = np.nan
 
-    # 2. TEC Slip Correction & Rolling Mean
+    # 2. TEC was already cycle-slip corrected per complete satellite arc.
     if 'TEC' in sat_df.columns:
         sat_df['TEC'] = pd.to_numeric(sat_df['TEC'], errors='coerce')
-        if not sat_df['TEC'].dropna().empty:
-            diffs = sat_df['TEC'].diff().fillna(0)
-            slips = diffs.copy()
-            slips[slips.abs() <= 3.0] = 0
-            sat_df['TEC'] = sat_df['TEC'] - slips.cumsum()
-            sat_df.loc[low_elev_mask, 'TEC'] = np.nan
+        sat_df.loc[low_elev_mask, 'TEC'] = np.nan
 
     # 3. S4 cleanup
     s4_zero_mask = sat_df['datetime_loc'].dt.hour >= 21
@@ -1297,5 +1470,6 @@ app.clientside_callback(
 )
 
 if __name__ == "__main__":
+    host = os.environ.get('HOST', '0.0.0.0')
     port = int(os.environ.get('PORT', 8050))
-    app.run_server(host='0.0.0.0', port=port, debug=False)
+    app.run_server(host=host, port=port, debug=False)

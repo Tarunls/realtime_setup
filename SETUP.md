@@ -86,6 +86,26 @@ after a partial failure.
 The included `realtime_2026` program is a Linux ARM64 executable, so this setup
 script intentionally stops on incompatible computers.
 
+## Local test with historic data
+
+To run the current dashboard against the archived Jicamarca realtime CSVs
+without changing Azure, run:
+
+```bash
+./run_local_historic.sh
+```
+
+Then open <http://127.0.0.1:8050>. The first run creates an ignored local
+virtual environment and installs the dashboard dependencies. Stop the server
+with Control-C.
+
+To use a different directory of realtime CSV files, pass it as the first
+argument:
+
+```bash
+./run_local_historic.sh /path/to/realtime/csv/files
+```
+
 ## Update all dashboards
 
 Preview which apps will change:
