@@ -20,7 +20,7 @@ from flask import jsonify
 LOCAL_DATA_DIR = os.getenv("DATA_MOUNT_PATH", "dataforday") 
 GLOBAL_STATUS = "Initializing..."
 UPDATE_INTERVAL_MS = 300000 # Update graphs every 5 minutes
-S4_MIN_SAMPLES = 200 # Minimum per-band samples for a visible S4 value
+S4_MIN_SAMPLES = 200 # S4 is visible only above this per-band sample count
 HEALTH_WINDOW_HOURS = float(os.getenv("HEALTH_WINDOW_HOURS", "24"))
 HEALTH_COVERAGE_THRESHOLD = float(
     os.getenv("HEALTH_COVERAGE_THRESHOLD", "0.90")
@@ -613,10 +613,10 @@ def fetch_and_process_local_data():
         )
             
         if 'n_l1' in df.columns:
-            if 's4_f1' in df.columns: df.loc[df['n_l1'] < S4_MIN_SAMPLES, 's4_f1'] = None
-            if 's4' in df.columns: df.loc[df['n_l1'] < S4_MIN_SAMPLES, 's4'] = None
+            if 's4_f1' in df.columns: df.loc[df['n_l1'] <= S4_MIN_SAMPLES, 's4_f1'] = None
+            if 's4' in df.columns: df.loc[df['n_l1'] <= S4_MIN_SAMPLES, 's4'] = None
         if 'n_l2' in df.columns and 's4_f2' in df.columns:
-            df.loc[df['n_l2'] < S4_MIN_SAMPLES, 's4_f2'] = None
+            df.loc[df['n_l2'] <= S4_MIN_SAMPLES, 's4_f2'] = None
             
         df = df.sort_values('datetime')
 
