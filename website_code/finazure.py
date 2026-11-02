@@ -18,7 +18,7 @@ from flask import jsonify
 from replay_display import replay_display_data, replay_status
 
 # --- CONFIGURATION ---
-LOCAL_DATA_DIR = os.getenv("DATA_MOUNT_PATH", "dataforday") 
+LOCAL_DATA_DIR = os.getenv("DATA_MOUNT_PATH", "dataforday")
 GLOBAL_STATUS = "Initializing..."
 DASHBOARD_REPLAY_ENABLED = os.getenv("DASHBOARD_REPLAY_ENABLED", "false").lower() == "true"
 UPDATE_INTERVAL_MS = 300000 # Update graphs every 5 minutes
@@ -327,9 +327,9 @@ def add_carrier_phase_tec(df, max_gap=TEC_MAX_GAP):
     return df
 
 # Initialize Dash
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG], 
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG],
                 meta_tags=[{'name': 'viewport', 'content': 'width=device-width, initial-scale=1.0'}])
-server = app.server 
+server = app.server
 load_figure_template("cyborg")
 
 # --- CUSTOM SPLASH SCREEN ---
@@ -344,7 +344,7 @@ app.index_string = '''
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
             html { scroll-behavior: smooth; } /* Smooth auto-scrolling */
-            
+
             #splash-screen {
                 position: fixed;
                 top: 0;
@@ -359,7 +359,7 @@ app.index_string = '''
                 align-items: center;
                 transition: opacity 0.6s ease-in-out;
             }
-            
+
             .radar-spinner {
                 width: 80px;
                 height: 80px;
@@ -369,12 +369,12 @@ app.index_string = '''
                 animation: spin 1s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite;
                 box-shadow: 0 0 20px rgba(0, 204, 150, 0.2);
             }
-            
+
             @keyframes spin {
                 0% { transform: rotate(0deg); }
                 100% { transform: rotate(360deg); }
             }
-            
+
             .splash-text {
                 margin-top: 25px;
                 color: #00cc96;
@@ -385,7 +385,7 @@ app.index_string = '''
                 font-size: 0.85rem;
                 animation: pulse 2s infinite;
             }
-            
+
             @keyframes pulse {
                 0%, 100% { opacity: 1; }
                 50% { opacity: 0.5; }
@@ -491,15 +491,15 @@ app.index_string = '''
             <div class="radar-spinner"></div>
             <div class="splash-text">Gathering Data...</div>
         </div>
-        
+
         {%app_entry%}
-        
+
         <footer>
             {%config%}
             {%scripts%}
             {%renderer%}
         </footer>
-        
+
         <script>
             window.onload = function() {
                 setTimeout(function() {
@@ -508,7 +508,7 @@ app.index_string = '''
                         splash.style.opacity = '0';
                         setTimeout(() => splash.remove(), 600);
                     }
-                }, 800); 
+                }, 800);
             };
         </script>
     </body>
@@ -534,7 +534,7 @@ def read_local_csv(filepath):
 def fetch_and_process_local_data():
     global GLOBAL_STATUS
     target_dir = os.path.abspath(LOCAL_DATA_DIR)
-    
+
     if not os.path.exists(target_dir):
         GLOBAL_STATUS = f"❌ Error: The directory '{target_dir}' does not exist."
         return pd.DataFrame()
@@ -563,7 +563,7 @@ def fetch_and_process_local_data():
             return pd.DataFrame()
 
         df = pd.concat(df_list, ignore_index=True)
-        
+
         if 'const' not in df.columns:
             return pd.DataFrame()
 
@@ -587,7 +587,7 @@ def fetch_and_process_local_data():
 
         current_time_utc = pd.Timestamp.utcnow().tz_localize(None)
         df = df[df['datetime'] <= (current_time_utc + pd.Timedelta(hours=2))]
-        
+
         if df.empty: return df
 
         latest_time = df['datetime'].max()
@@ -597,7 +597,7 @@ def fetch_and_process_local_data():
         SAFE_MAP = {float(k): v for k, v in SYSTEM_MAP.items()}
         df['const'] = pd.to_numeric(df['const'], errors='coerce')
         df['system'] = df['const'].map(SAFE_MAP).fillna("Unknown")
-        
+
         df = df[df['system'] != "Unknown"]
         if df.empty: return df
 
@@ -627,13 +627,13 @@ def fetch_and_process_local_data():
             len(df),
             int(dual_phase_rows.sum()),
         )
-            
+
         if 'n_l1' in df.columns:
             if 's4_f1' in df.columns: df.loc[df['n_l1'] <= S4_MIN_SAMPLES, 's4_f1'] = None
             if 's4' in df.columns: df.loc[df['n_l1'] <= S4_MIN_SAMPLES, 's4'] = None
         if 'n_l2' in df.columns and 's4_f2' in df.columns:
             df.loc[df['n_l2'] <= S4_MIN_SAMPLES, 's4_f2'] = None
-            
+
         df = df.sort_values('datetime')
 
         updated_at = datetime.now(pytz.timezone(STATION_TZ))
@@ -762,7 +762,7 @@ if not initial_display_df.empty:
     else:
         last_row = initial_display_df.iloc[-1]
         default_sys, default_prn = last_row['system'], int(last_row['prn'])
-        
+
     prns_for_default_sys = initial_display_df[initial_display_df['system'] == default_sys]['prn'].dropna().unique()
     initial_prn_options = [{'label': f"PRN {int(p)}", 'value': int(p)} for p in sorted(prns_for_default_sys)]
 
@@ -778,7 +778,7 @@ app.layout = dbc.Container(
     className="manuscript-dashboard",
     style={"padding": "12px", "maxWidth": "1800px"},
     children=[
-    
+
     # Auto-scrolling anchor
     dcc.Location(id='url', refresh=False),
     # Interval timer for live refresh
@@ -839,14 +839,14 @@ app.layout = dbc.Container(
                     )
                 ], className="border-0 shadow-sm")
             ], md=9, className="mb-3"),
-            
+
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader("Skyplot Controls", className="text-center"),
                     dbc.CardBody([
                         html.Label("Elevation Mask (°):", className="fw-bold text-muted small"),
                         dbc.Input(id='sky-elev-mask', type='number', value=10, min=0, max=90, className="mb-3"),
-                        
+
                         html.Label("Time Window:", className="fw-bold text-muted small"),
                         dcc.Dropdown(id='sky-time-window', options=[
                             {'label': 'Last 1 Hour', 'value': 1},
@@ -913,14 +913,14 @@ app.layout = dbc.Container(
                     ], className="p-2")
                 ], className="border-0 shadow-sm", style={"height": "100%"})
             ], md=9, className="mb-3"),
-            
+
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader("Timeline Controls", className="text-center"),
                     dbc.CardBody([
                         html.Label("Elevation Mask (°):", className="fw-bold text-muted small"),
                         dbc.Input(id='main-elev-mask', type='number', value=30, min=0, max=90, className="mb-3"),
-                        
+
                         html.Label("Time Window:", className="fw-bold text-muted small"),
                         dcc.Dropdown(id='main-time-window', options=[
                             {'label': 'Last 1 Hour', 'value': 1},
@@ -944,9 +944,9 @@ app.layout = dbc.Container(
                             id='main-manual-controls',
                             is_open=False,
                         ),
-                        
+
                         html.Label("Constellations:", className="fw-bold text-muted small"),
-                        dcc.Dropdown(id='main-constellations', options=[{'label': v, 'value': v} for v in SYSTEM_MAP.values()], 
+                        dcc.Dropdown(id='main-constellations', options=[{'label': v, 'value': v} for v in SYSTEM_MAP.values()],
                                      value=list(SYSTEM_MAP.values()), multi=True, className="mb-3 text-dark"),
 
                         html.Label("Signal Band:", className="fw-bold text-muted small"),
@@ -985,15 +985,15 @@ app.layout = dbc.Container(
                         )
                     ], className="shadow border-0")
                 ], md=9, className="mb-3"),
-                
+
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader("Detail Controls", className="text-center"),
                         dbc.CardBody([
                             html.Label("Constellation:", className="fw-bold text-muted small"),
-                            dcc.Dropdown(id='detail-constellation', options=[{'label': v, 'value': v} for v in SYSTEM_MAP.values()], 
+                            dcc.Dropdown(id='detail-constellation', options=[{'label': v, 'value': v} for v in SYSTEM_MAP.values()],
                                          value=default_sys, clearable=False, className="mb-3 text-dark"),
-                            
+
                             html.Label("Satellite PRN:", className="fw-bold text-muted small"),
                             dcc.Dropdown(id='detail-prn', options=initial_prn_options, value=default_prn, clearable=False, className="mb-3 text-dark"),
 
@@ -1020,7 +1020,7 @@ app.layout = dbc.Container(
                                 id='detail-manual-controls',
                                 is_open=False,
                             ),
-                            
+
                             html.Label("Elevation Filter (°):", className="fw-bold text-muted small"),
                             html.Div("Points below this mask drop to NaN.", className="text-muted mb-1", style={'fontSize': '0.75rem'}),
                             dbc.Input(id='detail-elev-mask', type='number', value=10, min=0, max=90, className="mb-3"),
@@ -1034,7 +1034,7 @@ app.layout = dbc.Container(
                 ], md=3, className="mb-3")
             ]),
             id='detail-collapse',
-            is_open=True 
+            is_open=True
         )
     ]),
 
@@ -1112,7 +1112,7 @@ def update_skyplot(
 ):
     if get_triggered_id() == 'btn-sky-reset':
         elev_mask, time_window, band, s4_min, s4_max = 10, 1, 'L1', 0, 0.6
-        
+
     df = display_data()
     if df.empty:
         return go.Figure(), ""
@@ -1142,7 +1142,7 @@ def update_skyplot(
         (df['datetime_loc'] >= skyplot_start)
         & (df['datetime_loc'] <= skyplot_end)
     ].copy()
-    
+
     fig_sky = go.Figure()
     if not recent.empty:
         s4_col = 's4_f2' if (band == 'L2' and 's4_f2' in recent.columns) else ('s4_f1' if 's4_f1' in recent.columns else 's4')
@@ -1153,9 +1153,9 @@ def update_skyplot(
         recent['time_utc_disp'] = recent['datetime'].dt.strftime(
             '%Y-%m-%d %H:%M:%S'
         )
-        
+
         fig_sky.add_trace(go.Scatterpolar(
-            r=90 - recent['elev'], theta=recent['az'], mode='markers', text=recent['elev'].round(1), 
+            r=90 - recent['elev'], theta=recent['az'], mode='markers', text=recent['elev'].round(1),
             marker=dict(color=recent.get(s4_col, 0), colorscale='Turbo', size=11, opacity=0.8,
                         cmin=s4_min, cmax=s4_max, colorbar=dict(
                             title=dict(text=y_axis_title, font=dict(size=20)),
@@ -1163,7 +1163,7 @@ def update_skyplot(
             customdata=recent[['prn', 'system', 'time_utc_disp']],
             hovertemplate="<b>%{customdata[1]} PRN %{customdata[0]}</b><br>UTC: %{customdata[2]}<br>Elev: %{text}°<br>Az: %{theta:.1f}°<br>S4: %{marker.color:.3f}<extra></extra>"
         ))
-    
+
     fig_sky.update_layout(
         template="cyborg", height=430, font=dict(family="Inter", size=17),
         paper_bgcolor="rgba(0,0,0,0)",
@@ -1198,12 +1198,12 @@ def sync_and_scroll(main_click, sky_click):
     triggered_id = ctx.triggered_id
     if triggered_id == 'main-graph' and main_click:
         point = main_click['points'][0]
-        prn = int(point['customdata'][0]) 
+        prn = int(point['customdata'][0])
         sys = point['customdata'][1]
         return sys, prn, '#detail-collapse'
     elif triggered_id == 'sky-plot' and sky_click:
         point = sky_click['points'][0]
-        prn = int(point['customdata'][0]) 
+        prn = int(point['customdata'][0])
         sys = point['customdata'][1]
         return sys, prn, '#detail-collapse'
     return dash.no_update, dash.no_update, dash.no_update
@@ -1224,15 +1224,15 @@ def display_details(
 ):
     if get_triggered_id() == 'btn-detail-reset':
         time_window, elev_mask = 3, 10
-        
+
     df = display_data()
     if df.empty or not sys or not prn: return go.Figure(), ""
 
     sat_df = df[(df['prn'] == prn) & (df['system'] == sys)].copy()
     if sat_df.empty: return go.Figure(), ""
-    
+
     sat_df['datetime_loc'] = sat_df['datetime'].dt.tz_localize('UTC').dt.tz_convert(STATION_TZ)
-    
+
     global_max_loc = df['datetime'].max().tz_localize('UTC').tz_convert(STATION_TZ)
     if time_window == 'manual':
         try:
@@ -1245,7 +1245,7 @@ def display_details(
         start_time, end_time = preset_time_limits(
             float(time_window or 3), global_max_loc
         )
-    
+
     sat_df = sat_df[
         (sat_df['datetime_loc'] >= start_time)
         & (sat_df['datetime_loc'] <= end_time)
@@ -1273,7 +1273,7 @@ def display_details(
     gap_mask = sat_df['datetime_loc'].diff() > pd.Timedelta(minutes=3)
     if gap_mask.any():
         gap_rows = sat_df[gap_mask].copy()
-        gap_rows['datetime_loc'] -= pd.Timedelta(seconds=1) 
+        gap_rows['datetime_loc'] -= pd.Timedelta(seconds=1)
         cols_to_nan = ['s4_f1', 's4_f2', 's4', 'TEC', 'elev', 'az']
         for col in cols_to_nan:
             if col in gap_rows.columns: gap_rows[col] = np.nan
@@ -1321,9 +1321,9 @@ def display_details(
         plot_mode = 'markers' if plot['col'] == 'az' else 'lines'
         line_dict = dict(color=plot['color'], width=2.5) if plot_mode == 'lines' else None
         marker_dict = dict(color=plot['color'], size=5) if plot_mode == 'markers' else None
-        
+
         fig.add_trace(go.Scatter(
-            x=sat_df['datetime_loc'], y=sat_df[plot['col']], mode=plot_mode, name=plot['title'], 
+            x=sat_df['datetime_loc'], y=sat_df[plot['col']], mode=plot_mode, name=plot['title'],
             line=line_dict, marker=marker_dict, connectgaps=False,
             customdata=sat_df[['time_utc_disp']],
             hovertemplate="UTC: %{customdata[0]}<br>Value: %{y:.3f}<extra></extra>"
@@ -1352,13 +1352,13 @@ def display_details(
         template="cyborg", height=700, font=dict(family="Inter", size=18),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         showlegend=False, margin=dict(l=105, r=30, t=18, b=78))
-    
+
     return fig, header
 
 # 5. Main Timeline Update
 @app.callback(
     Output('main-graph', 'figure'),
-    [Input('btn-main-apply', 'n_clicks'), Input('btn-main-reset', 'n_clicks'), Input('live-update', 'n_intervals')], 
+    [Input('btn-main-apply', 'n_clicks'), Input('btn-main-reset', 'n_clicks'), Input('live-update', 'n_intervals')],
     [State('main-elev-mask', 'value'), State('main-time-window', 'value'),
      State('main-manual-start', 'value'), State('main-manual-end', 'value'),
      State('main-constellations', 'value'), State('main-band', 'value')]
@@ -1384,7 +1384,7 @@ def update_main_timeline(
     if elev_mask is not None:
         df['elev'] = pd.to_numeric(df['elev'], errors='coerce')
         df = df[df['elev'] >= elev_mask]
-        
+
     if constellations:
         df = df[df['system'].isin(constellations)]
 
@@ -1418,7 +1418,7 @@ def update_main_timeline(
             customdata=sys_df[['prn', 'system', 'time_utc_disp']],
             hovertemplate="<b>%{customdata[1]} PRN %{customdata[0]}</b><br>UTC: %{customdata[2]}<br>S4: %{y:.3f}<extra></extra>"
         ))
-    
+
     tick_values, tick_labels = utc_ticks(timeline_start, timeline_end)
 
     fig_main.update_layout(
