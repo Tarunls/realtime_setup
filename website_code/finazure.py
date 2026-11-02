@@ -15,10 +15,12 @@ import pytz
 import threading # Added for background updates
 from dash.exceptions import MissingCallbackContextException
 from flask import jsonify
+from replay_display import replay_display_data, replay_status
 
 # --- CONFIGURATION ---
 LOCAL_DATA_DIR = os.getenv("DATA_MOUNT_PATH", "dataforday") 
 GLOBAL_STATUS = "Initializing..."
+DASHBOARD_REPLAY_ENABLED = os.getenv("DASHBOARD_REPLAY_ENABLED", "false").lower() == "true"
 UPDATE_INTERVAL_MS = 300000 # Update graphs every 5 minutes
 S4_MIN_SAMPLES = 200 # S4 is visible only above this per-band sample count
 HEALTH_WINDOW_HOURS = float(os.getenv("HEALTH_WINDOW_HOURS", "24"))
@@ -152,12 +154,18 @@ def manual_ut_time_limits(start_text, end_text, reference_time):
     return start_utc.tz_convert(STATION_TZ), end_utc.tz_convert(STATION_TZ)
 
 
+def display_data():
+    """Project archived data for display; GLOBAL_DF remains real observations."""
+    return replay_display_data(GLOBAL_DF, enabled=DASHBOARD_REPLAY_ENABLED)
+
+
 def default_manual_window(hours):
     """Return start/end HH:MM values based on the newest loaded sample."""
-    if GLOBAL_DF.empty:
+    display = display_data()
+    if display.empty:
         end_utc = pd.Timestamp.now(tz="UTC")
     else:
-        end_utc = GLOBAL_DF["datetime"].max().tz_localize("UTC")
+        end_utc = display["datetime"].max().tz_localize("UTC")
     start_utc = end_utc - pd.Timedelta(hours=hours)
     return start_utc.strftime("%H:%M"), end_utc.strftime("%H:%M")
 
@@ -634,13 +642,27 @@ def fetch_and_process_local_data():
 
 # --- INITIAL DATA LOAD & BACKGROUND WORKER ---
 logger.info("Pre-loading local data into memory...")
-GLOBAL_DF = fetch_and_process_local_data()
+def initial_data_load():
+    """Serve the verified archive quickly while mounted-file reads run later."""
+    archive = os.path.join(os.path.dirname(__file__), "replay_archive.csv.gz")
+    if DASHBOARD_REPLAY_ENABLED and os.path.isfile(archive):
+        try:
+            data = pd.read_csv(archive, parse_dates=["datetime"])
+            required = {"datetime", "system", "prn", "s4_f1", "s4_f2", "TEC", "az", "elev"}
+            if required.issubset(data.columns) and not data.empty:
+                logger.info("Loaded recorded archive: %d rows; checking live files in background", len(data))
+                return data
+        except Exception as error:
+            logger.warning("Recorded archive unavailable: %s", error)
+    return fetch_and_process_local_data()
+
+
+GLOBAL_DF = initial_data_load()
 
 def data_refresh_worker():
     """Background thread that safely refreshes GLOBAL_DF every 60 seconds."""
     global GLOBAL_DF
     while True:
-        time.sleep(300) 
         try:
             logger.info("Background thread fetching new data...")
             new_df = fetch_and_process_local_data()
@@ -648,6 +670,7 @@ def data_refresh_worker():
                 GLOBAL_DF = new_df
         except Exception as e:
             logger.error(f"Background refresh failed: {e}")
+        time.sleep(300)
 
 # Start the background polling thread for real-time updates
 threading.Thread(target=data_refresh_worker, daemon=True).start()
@@ -707,6 +730,7 @@ def health_check():
     response = {
         "status": "healthy" if healthy else "unhealthy",
         "station": STATION_NAME,
+        "display_mode": "replay" if display_data().attrs.get("replay_active") else "live",
         "coverage_percent": round(coverage * 100, 2),
         "required_coverage_percent": round(
             HEALTH_COVERAGE_THRESHOLD * 100,
@@ -720,17 +744,18 @@ def health_check():
 # Smart default satellite selection
 default_sys, default_prn = "GPS", 1
 initial_prn_options = []
+initial_display_df = display_data()
 
-if not GLOBAL_DF.empty:
-    dual_freq_df = GLOBAL_DF.dropna(subset=['s4_f2', 'TEC'])
+if not initial_display_df.empty:
+    dual_freq_df = initial_display_df.dropna(subset=['s4_f2', 'TEC'])
     if not dual_freq_df.empty:
         last_good = dual_freq_df.iloc[-1]
         default_sys, default_prn = last_good['system'], int(last_good['prn'])
     else:
-        last_row = GLOBAL_DF.iloc[-1]
+        last_row = initial_display_df.iloc[-1]
         default_sys, default_prn = last_row['system'], int(last_row['prn'])
         
-    prns_for_default_sys = GLOBAL_DF[GLOBAL_DF['system'] == default_sys]['prn'].dropna().unique()
+    prns_for_default_sys = initial_display_df[initial_display_df['system'] == default_sys]['prn'].dropna().unique()
     initial_prn_options = [{'label': f"PRN {int(p)}", 'value': int(p)} for p in sorted(prns_for_default_sys)]
 
 logger.info("Data loaded! App is ready.")
@@ -1041,7 +1066,7 @@ def update_header_status(clock_intervals, live_intervals):
         f"{now_local.strftime('%b %d, %Y %H:%M')} "
         f"{station_time_label(now_local)}"
     )
-    return current_text, GLOBAL_STATUS
+    return current_text, replay_status(display_data(), GLOBAL_STATUS)
 
 
 # Manual time controls
@@ -1080,7 +1105,7 @@ def update_skyplot(
     if get_triggered_id() == 'btn-sky-reset':
         elev_mask, time_window, band, s4_min, s4_max = 10, 1, 'L1', 0, 0.6
         
-    df = GLOBAL_DF.copy()
+    df = display_data()
     if df.empty:
         return go.Figure(), ""
 
@@ -1192,7 +1217,7 @@ def display_details(
     if get_triggered_id() == 'btn-detail-reset':
         time_window, elev_mask = 3, 10
         
-    df = GLOBAL_DF.copy()
+    df = display_data()
     if df.empty or not sys or not prn: return go.Figure(), ""
 
     sat_df = df[(df['prn'] == prn) & (df['system'] == sys)].copy()
@@ -1233,16 +1258,10 @@ def display_details(
         sat_df['TEC'] = pd.to_numeric(sat_df['TEC'], errors='coerce')
         sat_df.loc[low_elev_mask, 'TEC'] = np.nan
 
-    # 3. S4 cleanup
-    s4_zero_mask = sat_df['datetime_loc'].dt.hour >= 21
-    for s4_metric in ['s4_f1', 's4_f2', 's4']:
-        if s4_metric in sat_df.columns:
-            sat_df.loc[s4_zero_mask & (sat_df[s4_metric] <= 0), s4_metric] = np.nan
-
     if 'az' in sat_df.columns:
         sat_df['az'] = pd.to_numeric(sat_df['az'], errors='coerce')
 
-    # 4. GAP INJECTION
+    # 3. GAP INJECTION
     gap_mask = sat_df['datetime_loc'].diff() > pd.Timedelta(minutes=3)
     if gap_mask.any():
         gap_rows = sat_df[gap_mask].copy()
@@ -1252,7 +1271,7 @@ def display_details(
             if col in gap_rows.columns: gap_rows[col] = np.nan
         sat_df = pd.concat([sat_df, gap_rows]).sort_values('datetime_loc')
 
-    # 5. Final Display Prep
+    # 4. Final Display Prep
     sat_df['time_utc_disp'] = (
         sat_df['datetime_loc']
         .dt.tz_convert('UTC')
@@ -1345,7 +1364,7 @@ def update_main_timeline(
         time_window = 6
         constellations, band = list(SYSTEM_MAP.values()), 'L1'
 
-    df = GLOBAL_DF.copy()
+    df = display_data()
     if df.empty:
         return go.Figure()
 

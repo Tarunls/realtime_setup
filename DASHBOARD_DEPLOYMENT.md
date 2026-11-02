@@ -39,7 +39,7 @@ To update only specific apps, list them explicitly:
 4. Deploy, then open each URL printed by the script and check the header,
    plots, controls, and mobile tabs.
 
-The updater packages only `finazure.py` and `requirements.txt`. It also keeps
+The updater packages `finazure.py`, `replay_display.py`, and `requirements.txt`. It also keeps
 the supported Python/Gunicorn startup settings consistent. It does not change
 storage mounts or Raspberry Pi data collection.
 
