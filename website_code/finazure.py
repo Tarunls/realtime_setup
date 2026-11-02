@@ -601,10 +601,18 @@ def fetch_and_process_local_data():
         df = df[df['system'] != "Unknown"]
         if df.empty: return df
 
-        df = df.sort_values(['system', 'prn', 'datetime'])
-        df = df.drop_duplicates(subset=['system', 'prn', 'datetime'], keep='last')
-        
+
+         #remove duplicates keeping one with most n
+        df = (
+            df.sort_values("n_l1", ascending=False)
+            .drop_duplicates(subset=["system", "prn", "datetime"], keep="first")
+        )
+
+        df = df.sort_values(['datetime'])
+
         df['time_diff'] = df.groupby(['system', 'prn'])['datetime'].diff()
+
+
         df = df[(df['time_diff'] >= pd.Timedelta(seconds=30)) | (df['time_diff'].isna())]
         df = df.drop(columns=['time_diff'])
 
@@ -660,7 +668,7 @@ def initial_data_load():
 GLOBAL_DF = initial_data_load()
 
 def data_refresh_worker():
-    """Background thread that safely refreshes GLOBAL_DF every 60 seconds."""
+    """Background thread that safely refreshes GLOBAL_DF five minutes after each scan."""
     global GLOBAL_DF
     while True:
         try:

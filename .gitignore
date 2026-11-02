@@ -1,2 +1,5 @@
 deployment.zip
 .venv-local-dashboard/
+__pycache__/
+*.py[cod]
+.pytest_cache/
