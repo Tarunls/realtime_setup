@@ -7,17 +7,17 @@
  * - 99  for undetermined elevation.
  * - 999 for undetermined azimuth.
  * - timestamp GPS TIME, week , tow and leapseconds
- * - Last version outputs 60 seconds, when the max value is 59... 
- * 
+ * - Last version outputs 60 seconds, when the max value is 59...
+ *
  * Updates 24th Agu 2023:
  * - Added lock time to raw data
  * - Added Dilution of Position dDOP to the pos file
  * - Added the number of satellites used in the position svnum to the pos file.
  * - lat, long format have been scaled by 10e-7.
- * 
- * 
+ *
+ *
  */
- 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,7 +159,7 @@ typedef struct {
     double snr_sum[NFREQ];
     double snr_sq_sum[NFREQ];
     int count[NFREQ];
-    
+
     /*
      * ScintKit's one-minute product uses the first value in each GPS-minute
      * bin for pseudorange and the first nonzero value for carrier phase.
@@ -190,7 +190,7 @@ static int rt_time_valid = 0;
 typedef struct {        /* observation data record      gtime_t time;       /* receiver sampling time (GPST)  */
     //int week;
     float tow;
-    //unsigned char leapseconds;  
+    //unsigned char leapseconds;
     unsigned char cons; /* satellite/receiver gnssId */
     unsigned char sat; /* satellite/receiver number */
     unsigned char prn; /* prn number */
@@ -290,7 +290,7 @@ typedef struct{
   } raw_t;
 
 char nextcuthour(char currenthour){
-    
+
     if (currenthour >= 0 && currenthour< 4){
        return 4;
        }
@@ -447,7 +447,7 @@ extern void time2str(gtime_t t, char *s, int n)
     if (1.0-t.sec<0.5/pow(10.0,n)) {t.time++; t.sec=0.0;};
     time2epoch(t,ep);
     /*
-    
+
     sprintf(s,"%04.0f/%02.0f/%02.0f %02.0f:%02.0f:%0*.*f",ep[0],ep[1],ep[2],
             ep[3],ep[4],n<=0?2:n+3,n<=0?0:n,ep[5]);
     */
@@ -600,10 +600,10 @@ int satno(int sys, int prn)
 }
 
 
-/* TARUN EDIT STARTING HERE 
-This used to be for my attempt at a TCP stream which i then turned into file writing. Feel free to clean up. Check start_tcp_server 
+/* TARUN EDIT STARTING HERE
+This used to be for my attempt at a TCP stream which i then turned into file writing. Feel free to clean up. Check start_tcp_server
 **---------------------------------------------------------------------------*/
- 
+
 
 
 
@@ -624,7 +624,7 @@ static void process_rt_obs(int prn, int constellation, int f_idx,
 {
     if (f_idx < 0 || f_idx >= NFREQ) return;
 
-    
+
     double snr_dbhz = (double)snr_raw;
     double snr_linear = pow(10.0, snr_dbhz / 10.0);
 
@@ -809,11 +809,11 @@ void write_pvt(raw_t *raw,FILE *f2)
   raw->pos.data[0].pvt_min=  raw->pvt_min;
   raw->pos.data[0].pvt_sec=  raw->pvt_sec;
   raw->pos.data[0].day   =   raw->day;
-  raw->pos.data[0].month =   raw->month;  
+  raw->pos.data[0].month =   raw->month;
   raw->pos.data[0].year  =   raw->year;
   raw->pos.data[0].dop   =   raw->dop;
-  raw->pos.data[0].numsv =   raw->numsv;    
-  
+  raw->pos.data[0].numsv =   raw->numsv;
+
   fwrite(raw->pos.data,sizeof(position_t),raw->pos.n,f2);
 }
 
@@ -842,8 +842,8 @@ void write_header(raw_t *raw,FILE *f2)
   raw->hed.data[0].leapseconds=raw->leapseconds;
   raw->hed.data[0].tow=raw->obs.data[0].tow;
   raw->hed.data[0].week=raw->week;
-        
-    
+
+
   fwrite(raw->hed.data,sizeof(header_t),raw->hed.n,f2);
 }
 
@@ -898,7 +898,7 @@ int init_raw(raw_t *raw)
     raw->pos_flag=1;
     raw->dop=999;
     raw->numsv=99;
-           
+
     for (i=0;i<MAXRAWLEN;i++) raw->buff[i]=0;
     raw->obs.data =NULL; /* We are going to save data on this variable later*/
     if (!(raw->obs.data =(obsd_t *)malloc(sizeof(obsd_t)*MAXOBS))){
@@ -915,14 +915,14 @@ int init_raw(raw_t *raw)
     }
     raw->nav.n =0;
     for (i=0;i<MAXOBS;i++) raw->nav.data[i]=data1;
-    
+
     raw->hed.n = 1;
     if (!(raw->hed.data=(header_t *)malloc(sizeof(header_t)*1))){
         free(raw->hed.data); raw->hed.data=NULL;raw->hed.n=0;
         return 0;
     }
     raw->hed.data[0]=head0;
-    
+
     raw->pos.n = 1;
     if (!(raw->pos.data=(position_t *)malloc(sizeof(position_t)*1))){
         free(raw->pos.data); raw->pos.data=NULL;raw->pos.n=0;
@@ -1000,7 +1000,7 @@ static int decode_navsat(raw_t *raw)
     raw->nav.n=n;
     /* Update raw.obs*/
     return 0;
-    
+
 }
 static int decode_navpvt(raw_t *raw)
 {
@@ -1018,17 +1018,17 @@ static int decode_navpvt(raw_t *raw)
     raw->flat = I4(p+28)/10000000.0;
     raw->fhei = I4(p+36)/10000000.0;
     raw->dop  = U2(p+76);
-    
+
     if (raw->pvt_sec!=raw->last_pvt_sec)
     {
         raw->last_pvt_sec=raw->pvt_sec;
         //sprintf(raw->msgtype,"UTC second: %4d ",raw->pvt_sec);
         //printf("%s\n",raw->msgtype);
         raw->pos_flag=1;
-    
+
     }
-    
-    
+
+
 
     return 0; // Only update some variables dont write information
 }
@@ -1050,7 +1050,7 @@ static int decode_rxmrawx(raw_t *raw)
 
 
     //nmeas is the Number of measurements to follow(satellites' signals)
-    nmeas=U1(p+11); 
+    nmeas=U1(p+11);
     ver  =U1(p+13); /* version ([5] 5.15.3.1) */
     // Each binary package has a head of 24 bytes and 32 bytes for each signal.
     if (raw->len<24+32*nmeas) {
@@ -1059,7 +1059,7 @@ static int decode_rxmrawx(raw_t *raw)
 		}
         return -1;
     }
-    
+
     // Week Time
     tow=R8(p);
     //GPS week number in receiver local time
@@ -1071,7 +1071,7 @@ static int decode_rxmrawx(raw_t *raw)
         }
         return 0;
     }
-    
+
     double tow_min = floor(tow / (double)INTERVAL) * INTERVAL;
 
     /*
@@ -1126,11 +1126,11 @@ static int decode_rxmrawx(raw_t *raw)
         /* signal index in obs data */
         f=sig_idx(sys,code);// return frequency index
         /* This only works after the first signal pass*/
-        
+
         raw->week = week;
         raw->leapseconds = leapseconds;
-        
-        
+
+
         for (j=0;j<n;j++) {
 			/* search with index j has the data from the readed satellite's signal*/
             if (raw->obs.data[j].sat==sat)
@@ -1138,7 +1138,7 @@ static int decode_rxmrawx(raw_t *raw)
             }
         }
 
-        if (j==n) { 
+        if (j==n) {
             //raw->obs.data[n].time=time;
             //raw->obs.data[n].week=week;
             //raw->obs.data[n].leapseconds=leapseconds;
@@ -1179,9 +1179,9 @@ static int decode_rxmrawx(raw_t *raw)
     }// FOR's end braket
     raw->time=time;
     raw->obs.n=n;
-    
+
     raw->rxm_flag=0; //allows be sure that rxm data has been readed
-    
+
 	return 1;
 }
 
@@ -1191,7 +1191,7 @@ static int decode_ubx(raw_t *raw)
     /* checksum function updated*/
     if (!checksum(raw->buff,raw->len)) {
         return -1;
-    }  
+    }
     switch (type) {
         case ID_RXMRAWX : return decode_rxmrawx(raw);
         case ID_NAVPVT  : return decode_navpvt(raw);

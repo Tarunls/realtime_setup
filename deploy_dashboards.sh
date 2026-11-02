@@ -85,7 +85,7 @@ archive="$temp_dir/scintpi-dashboard.zip"
 
 (
     cd "$CODE_DIR"
-    zip -q -j "$archive" finazure.py requirements.txt
+    zip -q -j "$archive" finazure.py replay_display.py requirements.txt
 )
 
 get_setting() {

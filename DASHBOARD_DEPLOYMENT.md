@@ -39,7 +39,7 @@ To update only specific apps, list them explicitly:
 4. Deploy, then open each URL printed by the script and check the header,
    plots, controls, and mobile tabs.
 
-The updater packages only `finazure.py` and `requirements.txt`. It also keeps
+The updater packages `finazure.py`, `replay_display.py`, and `requirements.txt`. It also keeps
 the supported Python/Gunicorn startup settings consistent. It does not change
 storage mounts or Raspberry Pi data collection.
 
@@ -82,4 +82,28 @@ already contains uploaded observations. Update the app in place:
 ```bash
 ./deploy_dashboards.sh scintpi-rg/scintpi-dash-utd
 ./setup_monitoring.sh YOUR_EMAIL@gmail.com scintpi-rg/scintpi-dash-utd
+```
+
+## Optional display replay
+
+Replay is disabled by default. Set `DASHBOARD_REPLAY_ENABLED=true` only for a
+station that needs a temporary display of its last recorded 24 hours. The status
+identifies the archive date. Original measurements and timestamps remain intact,
+and `/health` continues to evaluate real observations. Data less than 15 minutes
+old automatically bypass replay. Set the option back to `false` after recovery.
+
+An optional `website_code/replay_archive.csv.gz` startup cache can contain
+processed observations with their original timestamps. It is not included in the
+repository or deployment ZIP. Without it, the app reads the mounted CSV files.
+
+Deployment and monitoring scripts apply their standard 24-hour, 90% health
+settings. Reapply any station-specific health settings after running them.
+
+## Local checks
+
+With the dashboard requirements installed, run from the repository root:
+
+```bash
+PYTHONPATH=website_code python -m unittest discover -s tests -v
+bash -n deploy_dashboards.sh setup_everything.sh setup_monitoring.sh setup_storage_retention.sh run_local_historic.sh
 ```
